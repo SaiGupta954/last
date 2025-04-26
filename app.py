@@ -104,7 +104,8 @@ def load_data():
         st.sidebar.success("✅ Loaded from Azure SQL Database")
 
         date_col = find_col(trans, "date", "purchase", "purchase_")
-        trans[date_col] = pd.to_datetime(trans[date_col], errors="coerce")
+        trans[date_col] = pd.to_datetime(trans[date_col], format="%Y-%m-%d", errors="coerce")
+
         trans = trans.rename(columns={date_col: "DATE"})
 
     except Exception as e:
