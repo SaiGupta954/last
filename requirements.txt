@@ -4,3 +4,9 @@ sqlalchemy
 pyodbc
 plotly
 scikit-learn
+streamlit
+pandas
+sqlalchemy
+pyodbc
+plotly
+scikit-learn
