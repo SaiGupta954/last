@@ -36,21 +36,17 @@ if registered:
 @st.cache_resource
 def get_engine():
     try:
-        server = st.secrets["db_credentials"]["server"]
-database = st.secrets["db_credentials"]["database"]
-username = st.secrets["db_credentials"]["username"]
-password = st.secrets["db_credentials"]["password"]
-
-params = urllib.parse.quote_plus(
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-    f"SERVER={server},1433;"
-    f"DATABASE={database};"
-    f"UID={username};"
-    f"PWD={password};"
+        params = urllib.parse.quote_plus(
+    "DRIVER={ODBC Driver 17 for SQL Server};"
+    "SERVER=newretailserver123.database.windows.net,1433;"
+    "DATABASE=RetailDB;"
+    "UID=azureuser;"
+    "PWD=YourStrongP@ssw0rd;"
     "Encrypt=yes;"
     "TrustServerCertificate=no;"
     "Connection Timeout=30;"
 )
+
 
         conn_str = f"mssql+pyodbc:///?odbc_connect={params}"
         engine = create_engine(conn_str, connect_args={"timeout": 30})
