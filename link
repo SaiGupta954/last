@@ -1,1 +1,37 @@
 https://drive.google.com/drive/folders/1LxNE7zAvAMlfb3433HiQBa1cVa_-4EC-?usp=sharing
+
+
+
+# Step 1: Install Git LFS
+# (skip if already installed)
+
+# Mac
+brew install git-lfs
+
+# Windows
+# Download installer from https://git-lfs.github.com/
+
+# Ubuntu Linux
+# sudo apt install git-lfs
+
+# Step 2: Initialize LFS
+git lfs install
+
+# Step 3: Clone your GitHub repo locally
+git clone https://github.com/SaiGupta954/last.git
+
+# Step 4: Move into your repo folder
+cd last
+
+# Step 5: Track CSV files using LFS
+git lfs track "*.csv"
+
+# Step 6: Add .gitattributes (automatically created) and CSVs
+git add .gitattributes
+git add *.csv
+
+# Step 7: Commit your changes
+git commit -m "Added large CSV files using Git LFS"
+
+# Step 8: Push to GitHub
+git push origin main
