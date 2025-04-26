@@ -1,54 +1,16 @@
 import streamlit as st
 import pandas as pd
-import pymssql  # Changed from pyodbc to pymssql
-from sqlalchemy import create_engine, text
-import hashlib
+import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, classification_report, confusion_matrix
-import plotly.express as px
+import hashlib
 
-# ---------------------- DATABASE CONNECTIONS ----------------------
+st.set_page_config(page_title="Retail Analytics App", layout="wide")
 
-server = 'newretailserver123.database.windows.net'
-database = 'RetailDB'
-username = 'azureuser'
-password = 'YourStrongP@ssw0rd'
-
-def get_connection():
-    # pymssql connection that doesn't require ODBC drivers
-    return pymssql.connect(
-        server=server,
-        user=username,
-        password=password,
-        database=database
-    )
-
-def get_sqlalchemy_engine():
-    # Updated engine using pymssql dialect
-    return create_engine(
-        f'mssql+pymssql://{username}:{password}@{server}/{database}'
-    )
-
-# ---------------------- DATA LOADING ----------------------
-
-@st.cache_data(ttl=600)
-def load_data():
-    conn = get_connection()
-    df_transactions = pd.read_sql("SELECT * FROM Transactions", conn)
-    df_households = pd.read_sql("SELECT * FROM Households", conn)
-    df_products = pd.read_sql("SELECT * FROM Products", conn)
-    conn.close()
-    df_transactions.columns = df_transactions.columns.str.strip()
-    df_households.columns = df_households.columns.str.strip()
-    df_products.columns = df_products.columns.str.strip()
-    return df_transactions, df_households, df_products
-
-# ---------------------- AUTHENTICATION (optional) ----------------------
-
+# --- Authentication (simple, local memory) ---
 def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
-
 def check_hashes(password, hashed_text):
     return make_hashes(password) == hashed_text
 
@@ -88,63 +50,28 @@ def login_signup():
                 else:
                     st.sidebar.error("Invalid credentials")
 
-# ---------------------- CLV CALCULATION & SAVE ----------------------
-
-def calculate_and_save_clv():
-    engine = get_sqlalchemy_engine()
-    # Calculate CLV
-    query = """
-    SELECT HSHD_NUM, SUM(SPEND) AS CLV
-    FROM transactions
-    GROUP BY HSHD_NUM
-    """
-    df = pd.read_sql_query(query, engine)
-    # Create table if not exists
-    create_table_query = text("""
-    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
-    BEGIN
-        CREATE TABLE clv_results (
-            HSHD_NUM INT PRIMARY KEY,
-            CLV FLOAT
-        );
-    END;
-    """)
-    insert_query = text("INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)")
-    with engine.connect() as conn:
-        conn.execute(create_table_query)
-        for _, row in df.iterrows():
-            conn.execute(insert_query, {'HSHD_NUM': int(row['HSHD_NUM']), 'CLV': float(row['CLV'])})
-    st.success("✅ CLV results saved to clv_results table in Azure SQL!")
-
-# ---------------------- HOUSEHOLD SEARCH ----------------------
-
-def search_household(hshd_num):
-    conn = get_connection()
-    query = """
-    SELECT H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_ AS Date, 
-           P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY
-    FROM dbo.households H
-    JOIN dbo.transactions T ON H.HSHD_NUM = T.HSHD_NUM
-    LEFT JOIN dbo.products P ON T.PRODUCT_NUM = P.PRODUCT_NUM
-    WHERE H.HSHD_NUM = %s
-    ORDER BY H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_, P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY;
-    """
-    # Note: pymssql uses %s for parameters, not ? like pyodbc
-    df = pd.read_sql(query, conn, params=(hshd_num,))
-    conn.close()
-    return df
-
-# ---------------------- STREAMLIT APP LAYOUT ----------------------
-
-st.set_page_config(page_title="Retail Analytics App", layout="wide")
-
 login_signup()
 if not st.session_state.authenticated:
     st.stop()
 
+# --- Database connection using Streamlit's SQLConnection ---
+conn = st.connection("sql", type="sql")
+
+@st.cache_data(ttl=600)
+def load_data():
+    df_transactions = conn.query("SELECT * FROM Transactions", ttl=600)
+    df_households = conn.query("SELECT * FROM Households", ttl=600)
+    df_products = conn.query("SELECT * FROM Products", ttl=600)
+    df_transactions.columns = df_transactions.columns.str.strip()
+    df_households.columns = df_households.columns.str.strip()
+    df_products.columns = df_products.columns.str.strip()
+    return df_transactions, df_households, df_products
+
+# --- Sidebar Navigation ---
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Dashboard", "Household Search", "CLV Calculation", "Data Loader"])
 
+# --- Dashboard ---
 if page == "Dashboard":
     st.title("📊 Retail Customer Analytics Dashboard")
     df_transactions, df_households, df_products = load_data()
@@ -154,31 +81,26 @@ if page == "Dashboard":
     full_df = df_transactions.merge(df_households, on='hshd_num', how='left')
     full_df = full_df.merge(df_products, on='product_num', how='left')
 
-    # --- Engagement Over Time ---
     st.header("📈 Customer Engagement Over Time")
     df_transactions['date'] = pd.to_datetime(df_transactions['YEAR'].astype(str) + df_transactions['WEEK_NUM'].astype(str) + '0', format='%Y%U%w')
     weekly_engagement = df_transactions.groupby(df_transactions['date'].dt.to_period('W'))['SPEND'].sum().reset_index()
     weekly_engagement['ds'] = weekly_engagement['date'].dt.start_time
     st.line_chart(weekly_engagement.set_index('ds')['SPEND'])
 
-    # --- Demographics and Engagement ---
     st.header("👨👩👧 Demographics and Engagement")
     selected_demo = st.selectbox("Segment by:", ['INCOME_RANGE', 'AGE_RANGE', 'CHILDREN'])
     demo_spending = full_df.groupby(selected_demo)['SPEND'].sum().reset_index()
     st.bar_chart(demo_spending.rename(columns={selected_demo: 'index'}).set_index('index'))
 
-    # --- Customer Segmentation ---
     st.header("🔍 Customer Segmentation")
     segmentation = full_df.groupby(['hshd_num']).agg({'SPEND': 'sum', 'INCOME_RANGE': 'first', 'AGE_RANGE': 'first'})
     st.dataframe(segmentation.sort_values(by='SPEND', ascending=False).head(10))
 
-    # --- Loyalty Program Effect ---
     st.header("🌟 Loyalty Program Effect")
     if 'LOYALTY_FLAG' in df_households.columns:
         loyalty = full_df.groupby('LOYALTY_FLAG')['SPEND'].agg(['sum', 'mean']).reset_index()
         st.dataframe(loyalty)
 
-    # --- Basket Analysis ---
     st.header("🧺 Basket Analysis")
     basket = df_transactions.groupby(['BASKET_NUM', 'product_num'])['SPEND'].sum().reset_index()
     top_products = basket.groupby('product_num')['SPEND'].sum().nlargest(10).reset_index()
@@ -191,7 +113,6 @@ if page == "Dashboard":
     else:
         st.dataframe(top_products)
 
-    # --- Seasonal Spending Patterns ---
     st.header("📆 Seasonal Spending Patterns")
     df_transactions['month'] = df_transactions['date'].dt.month_name()
     seasonal = df_transactions.groupby('month')['SPEND'].sum().reset_index()
@@ -202,29 +123,24 @@ if page == "Dashboard":
     seasonal = seasonal.sort_values('month')
     st.bar_chart(seasonal.set_index('month'))
 
-    # --- Customer Lifetime Value ---
     st.header("💰 Customer Lifetime Value")
     clv = df_transactions.groupby('hshd_num')['SPEND'].sum().reset_index().sort_values(by='SPEND', ascending=False)
     st.dataframe(clv.head(10))
 
-    # --- Customer Spending by Product Category ---
     st.header("📊 Customer Spending by Product Category")
     category_spending = full_df.groupby('COMMODITY')['SPEND'].sum().reset_index()
     st.bar_chart(category_spending.set_index('COMMODITY')['SPEND'])
 
-    # --- Top 10 Customers by Spending ---
     st.header("🏆 Top 10 Customers by Spending")
     top_customers = full_df.groupby('hshd_num')['SPEND'].sum().reset_index().sort_values(by='SPEND', ascending=False)
     st.dataframe(top_customers.head(10))
 
-    # --- Trends in Age Group Spending ---
     st.header("📈 Trends in Age Group Spending")
     age_group_spending = full_df.groupby('AGE_RANGE')['SPEND'].sum().reset_index()
     st.bar_chart(age_group_spending.set_index('AGE_RANGE')['SPEND'])
     fig = px.pie(age_group_spending, values='SPEND', names='AGE_RANGE', title='Spending Distribution by Age Group')
     st.plotly_chart(fig)
 
-    # --- Tabs for ML Analysis ---
     tab1, tab2 = st.tabs(["⚠️ Churn Prediction", "🧺 Basket Analysis"])
     with tab1:
         st.header("Churn Prediction: Customer Engagement Over Time")
@@ -255,7 +171,6 @@ if page == "Dashboard":
             else:
                 st.warning("No data found for selected filters.")
 
-        # ML Churn Prediction
         st.subheader("ML Churn Prediction: At-Risk Customers")
         now = df_transactions['date'].max()
         rfm = df_transactions.groupby('hshd_num').agg(
@@ -308,19 +223,28 @@ if page == "Dashboard":
             file_name='predicted_vs_actual_basket_spend.csv',
             mime='text/csv',
         )
-        # Feature importance
         importances = pd.Series(rf.feature_importances_, index=X_basket.columns)
         top_features = importances.sort_values(ascending=False).head(10)
         st.write("**Top Drivers of Basket Spend:**")
         st.bar_chart(top_features)
 
+# --- Household Search ---
 elif page == "Household Search":
     st.title("Search Household Transactions")
     hshd_num = st.text_input("Enter Household Number (HSHD_NUM):")
     if hshd_num:
         try:
             hshd_num = int(hshd_num)
-            data = search_household(hshd_num)
+            query = f"""
+            SELECT H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_ AS Date,
+                   P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY
+            FROM dbo.households H
+            JOIN dbo.transactions T ON H.HSHD_NUM = T.HSHD_NUM
+            LEFT JOIN dbo.products P ON T.PRODUCT_NUM = P.PRODUCT_NUM
+            WHERE H.HSHD_NUM = {hshd_num}
+            ORDER BY H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_, P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY;
+            """
+            data = conn.query(query)
             if not data.empty:
                 st.dataframe(data)
             else:
@@ -328,12 +252,35 @@ elif page == "Household Search":
         except Exception as e:
             st.error(f"An error occurred: {e}")
 
+# --- CLV Calculation ---
 elif page == "CLV Calculation":
     st.title("Calculate and Save CLV")
-    st.write("This will calculate Customer Lifetime Value (CLV) per household and save it to the Azure SQL `clv_results` table.")
     if st.button("Run CLV Calculation and Save to SQL"):
-        calculate_and_save_clv()
+        clv_query = """
+        SELECT HSHD_NUM, SUM(SPEND) AS CLV
+        FROM transactions
+        GROUP BY HSHD_NUM
+        """
+        clv_df = conn.query(clv_query)
+        with conn.session as s:
+            s.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
+            BEGIN
+                CREATE TABLE clv_results (
+                    HSHD_NUM INT PRIMARY KEY,
+                    CLV FLOAT
+                );
+            END;
+            """)
+            for _, row in clv_df.iterrows():
+                s.execute(
+                    "INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)",
+                    params={"HSHD_NUM": int(row['HSHD_NUM']), "CLV": float(row['CLV'])}
+                )
+            s.commit()
+        st.success("✅ CLV results saved to clv_results table in Azure SQL!")
 
+# --- Data Loader (CSV Upload) ---
 elif page == "Data Loader":
     st.title("Data Loader: Upload Datasets")
     uploaded_transactions = st.file_uploader("Upload Transactions Dataset", type="csv")
