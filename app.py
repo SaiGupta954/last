@@ -90,9 +90,9 @@ def load_data():
     if engine is None:
         st.stop()
     try:
-        hh    = pd.read_sql_table("Households", engine)
-        trans = pd.read_sql_table("Transactions", engine)
-        prod  = pd.read_sql_table("Products", engine)
+        hh    = pd.read_sql_table("Households", engine, schema="dbo")
+        trans = pd.read_sql_table("Transactions", engine, schema="dbo")
+        prod  = pd.read_sql_table("Products", engine, schema="dbo")
 
         hh.columns, trans.columns, prod.columns = map(lambda c: c.str.strip(), [hh.columns, trans.columns, prod.columns])
         st.sidebar.success("✅ Loaded from Azure SQL Database")
