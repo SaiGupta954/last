@@ -15,7 +15,7 @@ server = 'newretailserver123.database.windows.net'
 database = 'RetailDB'
 username = 'azureuser'
 password = 'YourStrongP@ssw0rd'
-driver = '{ODBC Driver 18 for SQL Server}'
+driver = 'ODBC Driver 18 for SQL Server'
 
 def get_pyodbc_connection():
     return pyodbc.connect(
