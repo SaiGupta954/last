@@ -4,5 +4,3 @@ sqlalchemy
 pyodbc
 plotly
 scikit-learn
-unixodbc-dev
-msodbcsql18
