@@ -61,9 +61,9 @@ engine = get_engine()
 def auto_create_tables(engine):
     # Tables and their corresponding CSVs
     tables = {
-        "Households": "400_households.csv",
-        "Transactions": "400_transactions.csv",
-        "Products": "400_products.csv"
+        "households": "400_households.csv",
+        "transactions": "400_transactions.csv",
+        "products": "400_products.csv"
     }
 
     for table, csv_file in tables.items():
@@ -91,8 +91,8 @@ def load_data():
         st.stop()
     try:
         hh    = pd.read_sql_table("households", engine, schema="dbo")
-        trans = pd.read_sql_table("Transactions", engine, schema="dbo")
-        prod  = pd.read_sql_table("Products", engine, schema="dbo")
+        trans = pd.read_sql_table("transactions", engine, schema="dbo")
+        prod  = pd.read_sql_table("products", engine, schema="dbo")
 
         hh.columns, trans.columns, prod.columns = map(lambda c: c.str.strip(), [hh.columns, trans.columns, prod.columns])
         st.sidebar.success("✅ Loaded from Azure SQL Database")
