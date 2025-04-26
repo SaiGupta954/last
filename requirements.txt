@@ -1,7 +1,6 @@
-pandas
 streamlit
-pymssql==2.2.7
+pandas
 sqlalchemy
+pyodbc
 plotly
 scikit-learn
-hashlib
