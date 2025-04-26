@@ -1,6 +1,8 @@
 streamlit
 pandas
-sqlalchemy
-pyodbc
-plotly
+numpy
+matplotlib
 scikit-learn
+sqlalchemy
+mlxtend
+pyodbc
