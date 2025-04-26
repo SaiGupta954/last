@@ -57,18 +57,99 @@ if not st.session_state.authenticated:
     st.stop()
 
 # --- Database connection using Streamlit's SQLConnection ---
-# This uses the connection parameters from .streamlit/secrets.toml
-conn = st.connection("sql", type="sql")
+# Updated connection code to handle missing configuration gracefully
+try:
+    # First try to use the connection from secrets.toml
+    conn = st.connection("sql")
+except Exception as e:
+    st.warning("Database connection from secrets.toml failed. Please provide connection details.")
+    # Show connection configuration form
+    with st.expander("Configure Database Connection"):
+        db_type = st.selectbox("Database Type", ["mssql", "mysql", "postgresql", "sqlite"])
+        if db_type != "sqlite":
+            server = st.text_input("Server", "localhost")
+            database = st.text_input("Database Name", "retail")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            port = st.text_input("Port", "1433" if db_type == "mssql" else "3306" if db_type == "mysql" else "5432")
+            
+            if db_type == "mssql":
+                conn_string = f"mssql+pymssql://{username}:{password}@{server}:{port}/{database}"
+            elif db_type == "mysql":
+                conn_string = f"mysql+pymysql://{username}:{password}@{server}:{port}/{database}"
+            elif db_type == "postgresql":
+                conn_string = f"postgresql://{username}:{password}@{server}:{port}/{database}"
+        else:
+            db_path = st.text_input("SQLite Database Path", "retail.db")
+            conn_string = f"sqlite:///{db_path}"
+        
+        if st.button("Connect to Database"):
+            try:
+                conn = st.connection("sql", type="sql", url=conn_string)
+                st.success("Connected successfully!")
+            except Exception as e:
+                st.error(f"Connection failed: {e}")
+                st.info("Make sure you have the appropriate database driver installed.")
+                st.stop()
 
 @st.cache_data(ttl=600)
 def load_data():
-    df_transactions = conn.query("SELECT * FROM Transactions", ttl=600)
-    df_households = conn.query("SELECT * FROM Households", ttl=600)
-    df_products = conn.query("SELECT * FROM Products", ttl=600)
-    df_transactions.columns = df_transactions.columns.str.strip()
-    df_households.columns = df_households.columns.str.strip()
-    df_products.columns = df_products.columns.str.strip()
-    return df_transactions, df_households, df_products
+    try:
+        df_transactions = conn.query("SELECT * FROM Transactions", ttl=600)
+        df_households = conn.query("SELECT * FROM Households", ttl=600)
+        df_products = conn.query("SELECT * FROM Products", ttl=600)
+        df_transactions.columns = df_transactions.columns.str.strip()
+        df_households.columns = df_households.columns.str.strip()
+        df_products.columns = df_products.columns.str.strip()
+        return df_transactions, df_households, df_products
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        # Provide sample data if database connection fails
+        if st.button("Load Sample Data Instead"):
+            return load_sample_data()
+        st.stop()
+
+def load_sample_data():
+    """Load sample data for demonstration purposes when DB connection fails"""
+    # Create sample transaction data
+    transactions = pd.DataFrame({
+        'HSHD_NUM': range(1000, 1010) * 10,
+        'BASKET_NUM': range(100, 200),
+        'PURCHASE_': pd.date_range(start='2023-01-01', periods=100),
+        'PRODUCT_NUM': range(5000, 5100),
+        'SPEND': [round(float(i) * 1.5, 2) for i in range(100)],
+        'UNITS': [1] * 100,
+        'STORE_R': ['WEST'] * 50 + ['EAST'] * 50,
+        'WEEK_NUM': [i % 52 + 1 for i in range(100)],
+        'YEAR': [2023] * 100
+    })
+    transactions['date'] = pd.to_datetime(transactions['YEAR'].astype(str) + transactions['WEEK_NUM'].astype(str) + '0', format='%Y%U%w')
+    
+    # Create sample household data
+    households = pd.DataFrame({
+        'HSHD_NUM': range(1000, 1010),
+        'L': ['A', 'B', 'C', 'D'] * 2 + ['A', 'B'],
+        'AGE_RANGE': ['35-44', '45-54', '25-34', '55-64', '35-44', '65+', '25-34', '35-44', '45-54', '55-64'],
+        'MARITAL': ['MARRIED'] * 5 + ['SINGLE'] * 5,
+        'INCOME_RANGE': ['50-74K', '75-99K', '35-49K', '100-150K', '50-74K', '25-34K', '35-49K', '50-74K', '75-99K', '100-150K'],
+        'HOMEOWNER': ['YES'] * 6 + ['NO'] * 4,
+        'HSHD_COMPOSITION': ['2 Adults Kids', '2 Adults No Kids', '1 Adult Kids', '2 Adults Kids', '1 Adult No Kids'] * 2,
+        'HH_SIZE': [3, 2, 3, 4, 1, 2, 3, 2, 2, 4],
+        'CHILDREN': [1, 0, 1, 2, 0, 0, 1, 0, 0, 2]
+    })
+    
+    # Create sample product data
+    products = pd.DataFrame({
+        'PRODUCT_NUM': range(5000, 5100),
+        'DEPARTMENT': ['GROCERY'] * 30 + ['DAIRY'] * 30 + ['MEAT'] * 20 + ['PRODUCE'] * 20,
+        'COMMODITY': ['CEREAL'] * 15 + ['PASTA'] * 15 + ['MILK'] * 15 + ['CHEESE'] * 15 + 
+                     ['BEEF'] * 10 + ['CHICKEN'] * 10 + ['FRUITS'] * 10 + ['VEGETABLES'] * 10,
+        'BRAND_TY': ['NATIONAL'] * 50 + ['PRIVATE'] * 50,
+        'NATURAL_ORGANIC_FLAG': ['N'] * 75 + ['Y'] * 25
+    })
+    
+    st.success("Loaded sample data for demonstration!")
+    return transactions, households, products
 
 # --- Sidebar Navigation ---
 st.sidebar.title("Navigation")
@@ -87,15 +168,18 @@ if page == "Dashboard":
         full_df = full_df.merge(df_products, on='product_num', how='left')
 
         st.header("📈 Customer Engagement Over Time")
-        df_transactions['date'] = pd.to_datetime(df_transactions['YEAR'].astype(str) + df_transactions['WEEK_NUM'].astype(str) + '0', format='%Y%U%w')
+        if 'date' not in df_transactions.columns:
+            df_transactions['date'] = pd.to_datetime(df_transactions['YEAR'].astype(str) + df_transactions['WEEK_NUM'].astype(str) + '0', format='%Y%U%w')
         weekly_engagement = df_transactions.groupby(df_transactions['date'].dt.to_period('W'))['SPEND'].sum().reset_index()
         weekly_engagement['ds'] = weekly_engagement['date'].dt.start_time
         st.line_chart(weekly_engagement.set_index('ds')['SPEND'])
 
         st.header("👨👩👧 Demographics and Engagement")
-        selected_demo = st.selectbox("Segment by:", ['INCOME_RANGE', 'AGE_RANGE', 'CHILDREN'])
-        demo_spending = full_df.groupby(selected_demo)['SPEND'].sum().reset_index()
-        st.bar_chart(demo_spending.rename(columns={selected_demo: 'index'}).set_index('index'))
+        demo_options = [col for col in df_households.columns if col in ['INCOME_RANGE', 'AGE_RANGE', 'CHILDREN']]
+        if demo_options:
+            selected_demo = st.selectbox("Segment by:", demo_options)
+            demo_spending = full_df.groupby(selected_demo)['SPEND'].sum().reset_index()
+            st.bar_chart(demo_spending.rename(columns={selected_demo: 'index'}).set_index('index'))
 
         st.header("🔍 Customer Segmentation")
         segmentation = full_df.groupby(['hshd_num']).agg({'SPEND': 'sum', 'INCOME_RANGE': 'first', 'AGE_RANGE': 'first'})
@@ -243,22 +327,39 @@ elif page == "Household Search":
     if hshd_num:
         try:
             hshd_num = int(hshd_num)
-            query = f"""
-            SELECT H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_ AS Date,
-                   P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY
-            FROM dbo.households H
-            JOIN dbo.transactions T ON H.HSHD_NUM = T.HSHD_NUM
-            LEFT JOIN dbo.products P ON T.PRODUCT_NUM = P.PRODUCT_NUM
-            WHERE H.HSHD_NUM = {hshd_num}
-            ORDER BY H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_, P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY;
-            """
-            data = conn.query(query)
-            if not data.empty:
-                st.dataframe(data)
-            else:
-                st.write("No data found for the entered Household Number.")
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+            try:
+                query = f"""
+                SELECT H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_ AS Date,
+                       P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY
+                FROM dbo.households H
+                JOIN dbo.transactions T ON H.HSHD_NUM = T.HSHD_NUM
+                LEFT JOIN dbo.products P ON T.PRODUCT_NUM = P.PRODUCT_NUM
+                WHERE H.HSHD_NUM = {hshd_num}
+                ORDER BY H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_, P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY;
+                """
+                data = conn.query(query)
+                if not data.empty:
+                    st.dataframe(data)
+                else:
+                    st.write("No data found for the entered Household Number.")
+            except Exception as e:
+                st.error(f"Query error: {e}")
+                # Fallback to simpler query without schema qualification
+                try:
+                    simplified_query = f"""
+                    SELECT * FROM Transactions 
+                    WHERE HSHD_NUM = {hshd_num}
+                    """
+                    data = conn.query(simplified_query)
+                    if not data.empty:
+                        st.dataframe(data)
+                        st.info("Limited data displayed due to database schema differences.")
+                    else:
+                        st.write("No data found for the entered Household Number.")
+                except Exception as e2:
+                    st.error(f"Simplified query also failed: {e2}")
+        except ValueError:
+            st.error("Please enter a valid number for the Household Number.")
 
 # --- CLV Calculation ---
 elif page == "CLV Calculation":
@@ -272,31 +373,53 @@ elif page == "CLV Calculation":
             """
             clv_df = conn.query(clv_query)
             
-            with conn.session as s:
-                s.execute("""
-                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
-                BEGIN
-                    CREATE TABLE clv_results (
-                        HSHD_NUM INT PRIMARY KEY,
-                        CLV FLOAT
-                    );
-                END;
-                """)
-                
-                # Clear existing data
-                s.execute("DELETE FROM clv_results")
-                
-                # Insert new data
-                for _, row in clv_df.iterrows():
-                    s.execute(
-                        "INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)",
-                        params={"HSHD_NUM": int(row['HSHD_NUM']), "CLV": float(row['CLV'])}
-                    )
-                s.commit()
-            st.success("✅ CLV results saved to clv_results table in Azure SQL!")
+            try:
+                with conn.session as s:
+                    # First check if we're using SQL Server (which uses different syntax)
+                    try:
+                        s.execute("""
+                        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
+                        BEGIN
+                            CREATE TABLE clv_results (
+                                HSHD_NUM INT PRIMARY KEY,
+                                CLV FLOAT
+                            );
+                        END;
+                        """)
+                    except Exception:
+                        # For other database types like MySQL, PostgreSQL
+                        s.execute("""
+                        CREATE TABLE IF NOT EXISTS clv_results (
+                            HSHD_NUM INT PRIMARY KEY,
+                            CLV FLOAT
+                        )
+                        """)
+                    
+                    # Clear existing data
+                    s.execute("DELETE FROM clv_results")
+                    
+                    # Insert new data
+                    for _, row in clv_df.iterrows():
+                        s.execute(
+                            "INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)",
+                            params={"HSHD_NUM": int(row['HSHD_NUM']), "CLV": float(row['CLV'])}
+                        )
+                    s.commit()
+                st.success("✅ CLV results saved to clv_results table in database!")
+            except Exception as session_err:
+                st.error(f"Error saving to database: {session_err}")
+                st.info("Displaying results without saving to database")
+                st.dataframe(clv_df)
+                csv = clv_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download CLV Results as CSV",
+                    data=csv,
+                    file_name='clv_results.csv',
+                    mime='text/csv',
+                )
         except Exception as e:
             st.error(f"Error calculating CLV: {e}")
-            st.info("Please check your database connection settings in .streamlit/secrets.toml")
+            st.info("Please check your database connection settings")
 
 # --- Data Loader (CSV Upload) ---
 elif page == "Data Loader":
@@ -334,4 +457,58 @@ elif page == "Data Loader":
                 st.write("Products Data", pdf.head())
             except Exception as e:
                 st.error(f"Error loading data: {e}")
-                st.info("Please check your database connection settings in .streamlit/secrets.toml")
+                st.info("Please check your database connection settings")
+                
+    # Add functionality to save uploaded data to database
+    if ('transactions_df' in st.session_state and 
+        'households_df' in st.session_state and 
+        'products_df' in st.session_state):
+        if st.button("Save Uploaded Data to Database"):
+            try:
+                with conn.session as s:
+                    # Create tables if they don't exist
+                    try:
+                        # SQL Server syntax
+                        for table, df in [
+                            ('Transactions', st.session_state['transactions_df']),
+                            ('Households', st.session_state['households_df']),
+                            ('Products', st.session_state['products_df'])
+                        ]:
+                            cols = ", ".join([f"{col} VARCHAR(255)" for col in df.columns])
+                            s.execute(f"""
+                            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = '{table}')
+                            BEGIN
+                                CREATE TABLE {table} ({cols});
+                            END;
+                            """)
+                    except Exception:
+                        # Generic SQL syntax for other databases
+                        for table, df in [
+                            ('Transactions', st.session_state['transactions_df']),
+                            ('Households', st.session_state['households_df']),
+                            ('Products', st.session_state['products_df'])
+                        ]:
+                            cols = ", ".join([f"{col} VARCHAR(255)" for col in df.columns])
+                            s.execute(f"CREATE TABLE IF NOT EXISTS {table} ({cols})")
+                    
+                    # Insert data
+                    for table, df in [
+                        ('Transactions', st.session_state['transactions_df']),
+                        ('Households', st.session_state['households_df']),
+                        ('Products', st.session_state['products_df'])
+                    ]:
+                        # Clear existing data
+                        s.execute(f"DELETE FROM {table}")
+                        
+                        # Insert new data
+                        for _, row in df.iterrows():
+                            placeholders = ", ".join([f":{col}" for col in df.columns])
+                            cols = ", ".join(df.columns)
+                            params = {col: str(val) for col, val in row.items()}
+                            s.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", params=params)
+                        
+                    s.commit()
+                st.success("✅ All data saved to database successfully!")
+            except Exception as e:
+                st.error(f"Error saving to database: {e}")
+                st.info("Unable to save to database. You can still use the uploaded data for analysis.")
