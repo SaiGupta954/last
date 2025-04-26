@@ -62,63 +62,42 @@ if not st.session_state.authenticated:
     st.warning("Please log in to access the application.")
     st.stop()
 
-# --- Database Connection using Streamlit's SQLConnection (UPDATED METHOD) ---
-@st.cache_resource # Cache the connection object itself
-def get_db_connection():
-    """
-    Establishes and caches the database connection using st.connection
-    with keyword arguments, retrieving credentials securely from Streamlit secrets.
-    """
-    try:
-        # Define connection parameters using keyword arguments,
-        # retrieving sensitive info from st.secrets.
-        # Ensure your secrets are structured accordingly (e.g., in secrets.toml
-        # or Streamlit Cloud secrets).
-        # Example structure:
-        # [db_credentials]
-        # username = "your_azure_username"
-        # password = "Your_URL_Encoded_Password" # Ensure password is URL encoded if needed
-        # server = "your_server_name.database.windows.net"
-        # database = "your_database_name"
+import streamlit as st
 
+def get_db_connection():
+    try:
         conn = st.connection(
-            "sql",          # Connection name (used internally by Streamlit)
-            type="sql",     # Specify the connection type [2][4]
-            # --- Core Connection Details (obtained from st.secrets) ---
-            dialect="mssql", # Specify the dialect for Microsoft SQL Server [4]
+            "sql",          # Connection name (can be anything, "sql" is fine
+            type="sql",     # Tell Streamlit it's a SQL connection
+            dialect="mssql", # 'mssql' because you are connecting to Azure SQL
             username=st.secrets.db_credentials.username,
             password=st.secrets.db_credentials.password,
             host=st.secrets.db_credentials.server,
-            port=1433,      # Default SQL Server port
+            port=1433,      # Azure SQL always uses port 1433
             database=st.secrets.db_credentials.database,
-            # --- Driver Specific Arguments ---
-            # Passed via the 'query' parameter as a dictionary [4]
             query={
-                "driver": "ODBC Driver 17 for SQL Server", # Recommended driver for Cloud compatibility [5]
-                "Encrypt": "yes",
-                "TrustServerCertificate": "yes", # Set to 'no' in production unless certificate is properly configured
+                "driver": "ODBC Driver 18 for SQL Server",  # Update: use ODBC 18 (newer and better encryption support)
+                "Encrypt": "yes",  # Required for Azure
+                "TrustServerCertificate": "yes",  # 'yes' is easier; set 'no' if you have SSL properly configured
                 "ConnectionTimeout": "30",
             }
         )
-        # Test connection with a simple query to ensure it's working
+        # Test query
         conn.query("SELECT 1")
-        # st.success("Database connection established successfully!") # Optional success message
         return conn
+
     except Exception as e:
         st.error(f"Database connection failed: {e}")
         st.error("Please ensure your database credentials (username, password, server, database) are correctly configured in Streamlit Secrets.")
-        st.info("Secrets can be set in your local `.streamlit/secrets.toml` file or in the Streamlit Community Cloud application settings under a section like `[db_credentials]`.")
-        # Example structure for secrets.toml:
+        st.info("Secrets can be set in your local `.streamlit/secrets.toml` file or in the Streamlit Community Cloud app settings.")
         st.code("""
 [db_credentials]
-username = "your_azure_username"
-password = "Your_URL_Encoded_Password"
-server = "your_server_name.database.windows.net"
-database = "your_database_name"
+username = "azureuser"
+password = "YourStrongP%40ssw0rd"
+server = "newretailserver123.database.windows.net"
+database = "RetailDB"
         """, language="toml")
-        return None # Return None to indicate failure
-
-conn = get_db_connection()
+        return None
 
 # --- Data Loading Function (uses cached connection) ---
 # No changes needed here, it receives the 'conn' object
