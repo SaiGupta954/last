@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
-import pyodbc
+import pymssql  # Changed from pyodbc to pymssql
 from sqlalchemy import create_engine, text
-import urllib
 import hashlib
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -15,36 +14,27 @@ server = 'newretailserver123.database.windows.net'
 database = 'RetailDB'
 username = 'azureuser'
 password = 'YourStrongP@ssw0rd'
-driver = 'ODBC Driver 18 for SQL Server'
 
-def get_pyodbc_connection():
-    return pyodbc.connect(
-        f'DRIVER={driver};'
-        f'SERVER={server};'
-        f'DATABASE={database};'
-        f'UID={username};'
-        f'PWD={password};'
-        'Encrypt=yes;TrustServerCertificate=yes;Connection Timeout=30;'
+def get_connection():
+    # pymssql connection that doesn't require ODBC drivers
+    return pymssql.connect(
+        server=server,
+        user=username,
+        password=password,
+        database=database
     )
 
 def get_sqlalchemy_engine():
-    params = urllib.parse.quote_plus(
-        f"DRIVER={driver};"
-        f"SERVER={server};"
-        f"DATABASE={database};"
-        f"UID={username};"
-        f"PWD={password};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=yes;"
-        "Connection Timeout=30;"
+    # Updated engine using pymssql dialect
+    return create_engine(
+        f'mssql+pymssql://{username}:{password}@{server}/{database}'
     )
-    return create_engine(f"mssql+pyodbc:///?odbc_connect={params}")
 
 # ---------------------- DATA LOADING ----------------------
 
 @st.cache_data(ttl=600)
 def load_data():
-    conn = get_pyodbc_connection()
+    conn = get_connection()
     df_transactions = pd.read_sql("SELECT * FROM Transactions", conn)
     df_households = pd.read_sql("SELECT * FROM Households", conn)
     df_products = pd.read_sql("SELECT * FROM Products", conn)
@@ -129,17 +119,18 @@ def calculate_and_save_clv():
 # ---------------------- HOUSEHOLD SEARCH ----------------------
 
 def search_household(hshd_num):
-    conn = get_pyodbc_connection()
+    conn = get_connection()
     query = """
     SELECT H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_ AS Date, 
            P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY
     FROM dbo.households H
     JOIN dbo.transactions T ON H.HSHD_NUM = T.HSHD_NUM
     LEFT JOIN dbo.products P ON T.PRODUCT_NUM = P.PRODUCT_NUM
-    WHERE H.HSHD_NUM = ?
+    WHERE H.HSHD_NUM = %s
     ORDER BY H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_, P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY;
     """
-    df = pd.read_sql(query, conn, params=[hshd_num])
+    # Note: pymssql uses %s for parameters, not ? like pyodbc
+    df = pd.read_sql(query, conn, params=(hshd_num,))
     conn.close()
     return df
 
