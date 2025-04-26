@@ -5,12 +5,14 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, classification_report, confusion_matrix
 import hashlib
+from sqlalchemy import text
 
 st.set_page_config(page_title="Retail Analytics App", layout="wide")
 
 # --- Authentication (simple, local memory) ---
 def make_hashes(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
+
 def check_hashes(password, hashed_text):
     return make_hashes(password) == hashed_text
 
