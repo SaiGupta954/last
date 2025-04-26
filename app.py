@@ -20,6 +20,10 @@ if 'user_db' not in st.session_state:
     st.session_state.user_db = {}
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
+if 'conn' not in st.session_state:
+    st.session_state.conn = None
+if 'sample_data_loaded' not in st.session_state:
+    st.session_state.sample_data_loaded = False
 
 def login_signup():
     if not st.session_state.authenticated:
@@ -55,59 +59,6 @@ def login_signup():
 login_signup()
 if not st.session_state.authenticated:
     st.stop()
-
-# --- Database connection using Streamlit's SQLConnection ---
-# Updated connection code to handle missing configuration gracefully
-try:
-    # First try to use the connection from secrets.toml
-    conn = st.connection("sql")
-except Exception as e:
-    st.warning("Database connection from secrets.toml failed. Please provide connection details.")
-    # Show connection configuration form
-    with st.expander("Configure Database Connection"):
-        db_type = st.selectbox("Database Type", ["mssql", "mysql", "postgresql", "sqlite"])
-        if db_type != "sqlite":
-            server = st.text_input("Server", "localhost")
-            database = st.text_input("Database Name", "retail")
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            port = st.text_input("Port", "1433" if db_type == "mssql" else "3306" if db_type == "mysql" else "5432")
-            
-            if db_type == "mssql":
-                conn_string = f"mssql+pymssql://{username}:{password}@{server}:{port}/{database}"
-            elif db_type == "mysql":
-                conn_string = f"mysql+pymysql://{username}:{password}@{server}:{port}/{database}"
-            elif db_type == "postgresql":
-                conn_string = f"postgresql://{username}:{password}@{server}:{port}/{database}"
-        else:
-            db_path = st.text_input("SQLite Database Path", "retail.db")
-            conn_string = f"sqlite:///{db_path}"
-        
-        if st.button("Connect to Database"):
-            try:
-                conn = st.connection("sql", type="sql", url=conn_string)
-                st.success("Connected successfully!")
-            except Exception as e:
-                st.error(f"Connection failed: {e}")
-                st.info("Make sure you have the appropriate database driver installed.")
-                st.stop()
-
-@st.cache_data(ttl=600)
-def load_data():
-    try:
-        df_transactions = conn.query("SELECT * FROM Transactions", ttl=600)
-        df_households = conn.query("SELECT * FROM Households", ttl=600)
-        df_products = conn.query("SELECT * FROM Products", ttl=600)
-        df_transactions.columns = df_transactions.columns.str.strip()
-        df_households.columns = df_households.columns.str.strip()
-        df_products.columns = df_products.columns.str.strip()
-        return df_transactions, df_households, df_products
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        # Provide sample data if database connection fails
-        if st.button("Load Sample Data Instead"):
-            return load_sample_data()
-        st.stop()
 
 def load_sample_data():
     """Load sample data for demonstration purposes when DB connection fails"""
@@ -149,7 +100,72 @@ def load_sample_data():
     })
     
     st.success("Loaded sample data for demonstration!")
+    st.session_state.sample_data_loaded = True
     return transactions, households, products
+
+# --- Database connection using Streamlit's SQLConnection ---
+# This needs to happen before any functions that use it
+try:
+    # First try to use the connection from secrets.toml
+    st.session_state.conn = st.connection("sql")
+    st.success("Connected to database successfully!")
+except Exception as e:
+    st.warning("Database connection from secrets.toml failed. Please provide connection details.")
+    # Show connection configuration form
+    with st.expander("Configure Database Connection"):
+        db_type = st.selectbox("Database Type", ["mssql", "mysql", "postgresql", "sqlite"])
+        if db_type != "sqlite":
+            server = st.text_input("Server", "localhost")
+            database = st.text_input("Database Name", "retail")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            port = st.text_input("Port", "1433" if db_type == "mssql" else "3306" if db_type == "mysql" else "5432")
+            
+            if db_type == "mssql":
+                conn_string = f"mssql+pymssql://{username}:{password}@{server}:{port}/{database}"
+            elif db_type == "mysql":
+                conn_string = f"mysql+pymysql://{username}:{password}@{server}:{port}/{database}"
+            elif db_type == "postgresql":
+                conn_string = f"postgresql://{username}:{password}@{server}:{port}/{database}"
+        else:
+            db_path = st.text_input("SQLite Database Path", "retail.db")
+            conn_string = f"sqlite:///{db_path}"
+        
+        if st.button("Connect to Database"):
+            try:
+                st.session_state.conn = st.connection("sql", type="sql", url=conn_string)
+                st.success("Connected successfully!")
+            except Exception as e:
+                st.error(f"Connection failed: {e}")
+                st.info("You can use sample data instead.")
+
+# Button for loading sample data - OUTSIDE the cached function
+if st.session_state.conn is None and not st.session_state.sample_data_loaded:
+    if st.button("Load Sample Data Instead"):
+        sample_transactions, sample_households, sample_products = load_sample_data()
+        st.session_state.transactions_df = sample_transactions
+        st.session_state.households_df = sample_households
+        st.session_state.products_df = sample_products
+
+@st.cache_data(ttl=600)
+def load_data():
+    if st.session_state.conn is not None:
+        try:
+            df_transactions = st.session_state.conn.query("SELECT * FROM Transactions", ttl=600)
+            df_households = st.session_state.conn.query("SELECT * FROM Households", ttl=600)
+            df_products = st.session_state.conn.query("SELECT * FROM Products", ttl=600)
+            df_transactions.columns = df_transactions.columns.str.strip()
+            df_households.columns = df_households.columns.str.strip()
+            df_products.columns = df_products.columns.str.strip()
+            return df_transactions, df_households, df_products
+        except Exception as e:
+            st.error(f"Error loading data: {e}")
+            return None, None, None
+    elif st.session_state.sample_data_loaded:
+        return st.session_state.transactions_df, st.session_state.households_df, st.session_state.products_df
+    else:
+        st.error("No database connection available")
+        return None, None, None
 
 # --- Sidebar Navigation ---
 st.sidebar.title("Navigation")
@@ -159,8 +175,13 @@ page = st.sidebar.radio("Go to", ["Dashboard", "Household Search", "CLV Calculat
 if page == "Dashboard":
     st.title("📊 Retail Customer Analytics Dashboard")
     
-    try:
+    data_loaded = False
+    if st.session_state.conn is not None or st.session_state.sample_data_loaded:
         df_transactions, df_households, df_products = load_data()
+        if df_transactions is not None and df_households is not None and df_products is not None:
+            data_loaded = True
+    
+    if data_loaded:
         df_transactions.rename(columns={'HSHD_NUM': 'hshd_num', 'PRODUCT_NUM': 'product_num'}, inplace=True)
         df_households.rename(columns={'HSHD_NUM': 'hshd_num'}, inplace=True)
         df_products.rename(columns={'PRODUCT_NUM': 'product_num'}, inplace=True)
@@ -316,9 +337,14 @@ if page == "Dashboard":
             top_features = importances.sort_values(ascending=False).head(10)
             st.write("**Top Drivers of Basket Spend:**")
             st.bar_chart(top_features)
-    except Exception as e:
-        st.error(f"Error loading dashboard data: {e}")
-        st.info("Please check your database connection settings in .streamlit/secrets.toml")
+    else:
+        st.error("No data available. Please connect to a database or load sample data.")
+        if st.button("Load Sample Data"):
+            sample_transactions, sample_households, sample_products = load_sample_data()
+            st.session_state.transactions_df = sample_transactions
+            st.session_state.households_df = sample_households
+            st.session_state.products_df = sample_products
+            st.rerun()
 
 # --- Household Search ---
 elif page == "Household Search":
@@ -327,37 +353,47 @@ elif page == "Household Search":
     if hshd_num:
         try:
             hshd_num = int(hshd_num)
-            try:
-                query = f"""
-                SELECT H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_ AS Date,
-                       P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY
-                FROM dbo.households H
-                JOIN dbo.transactions T ON H.HSHD_NUM = T.HSHD_NUM
-                LEFT JOIN dbo.products P ON T.PRODUCT_NUM = P.PRODUCT_NUM
-                WHERE H.HSHD_NUM = {hshd_num}
-                ORDER BY H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_, P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY;
-                """
-                data = conn.query(query)
+            if st.session_state.conn is not None:
+                try:
+                    query = f"""
+                    SELECT H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_ AS Date,
+                           P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY
+                    FROM dbo.households H
+                    JOIN dbo.transactions T ON H.HSHD_NUM = T.HSHD_NUM
+                    LEFT JOIN dbo.products P ON T.PRODUCT_NUM = P.PRODUCT_NUM
+                    WHERE H.HSHD_NUM = {hshd_num}
+                    ORDER BY H.HSHD_NUM, T.BASKET_NUM, T.PURCHASE_, P.PRODUCT_NUM, P.DEPARTMENT, P.COMMODITY;
+                    """
+                    data = st.session_state.conn.query(query)
+                    if not data.empty:
+                        st.dataframe(data)
+                    else:
+                        st.write("No data found for the entered Household Number.")
+                except Exception as e:
+                    st.error(f"Query error: {e}")
+                    # Fallback to simpler query without schema qualification
+                    try:
+                        simplified_query = f"""
+                        SELECT * FROM Transactions 
+                        WHERE HSHD_NUM = {hshd_num}
+                        """
+                        data = st.session_state.conn.query(simplified_query)
+                        if not data.empty:
+                            st.dataframe(data)
+                            st.info("Limited data displayed due to database schema differences.")
+                        else:
+                            st.write("No data found for the entered Household Number.")
+                    except Exception as e2:
+                        st.error(f"Simplified query also failed: {e2}")
+            elif st.session_state.sample_data_loaded:
+                # Use sample data
+                data = st.session_state.transactions_df[st.session_state.transactions_df['HSHD_NUM'] == hshd_num]
                 if not data.empty:
                     st.dataframe(data)
                 else:
-                    st.write("No data found for the entered Household Number.")
-            except Exception as e:
-                st.error(f"Query error: {e}")
-                # Fallback to simpler query without schema qualification
-                try:
-                    simplified_query = f"""
-                    SELECT * FROM Transactions 
-                    WHERE HSHD_NUM = {hshd_num}
-                    """
-                    data = conn.query(simplified_query)
-                    if not data.empty:
-                        st.dataframe(data)
-                        st.info("Limited data displayed due to database schema differences.")
-                    else:
-                        st.write("No data found for the entered Household Number.")
-                except Exception as e2:
-                    st.error(f"Simplified query also failed: {e2}")
+                    st.write("No data found for the entered Household Number in sample data.")
+            else:
+                st.error("No database connection or sample data available.")
         except ValueError:
             st.error("Please enter a valid number for the Household Number.")
 
@@ -365,61 +401,77 @@ elif page == "Household Search":
 elif page == "CLV Calculation":
     st.title("Calculate and Save CLV")
     if st.button("Run CLV Calculation and Save to SQL"):
-        try:
-            clv_query = """
-            SELECT HSHD_NUM, SUM(SPEND) AS CLV
-            FROM transactions
-            GROUP BY HSHD_NUM
-            """
-            clv_df = conn.query(clv_query)
-            
+        if st.session_state.conn is not None:
             try:
-                with conn.session as s:
-                    # First check if we're using SQL Server (which uses different syntax)
-                    try:
-                        s.execute("""
-                        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
-                        BEGIN
-                            CREATE TABLE clv_results (
+                clv_query = """
+                SELECT HSHD_NUM, SUM(SPEND) AS CLV
+                FROM transactions
+                GROUP BY HSHD_NUM
+                """
+                clv_df = st.session_state.conn.query(clv_query)
+                
+                try:
+                    with st.session_state.conn.session as s:
+                        # First check if we're using SQL Server (which uses different syntax)
+                        try:
+                            s.execute("""
+                            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
+                            BEGIN
+                                CREATE TABLE clv_results (
+                                    HSHD_NUM INT PRIMARY KEY,
+                                    CLV FLOAT
+                                );
+                            END;
+                            """)
+                        except Exception:
+                            # For other database types like MySQL, PostgreSQL
+                            s.execute("""
+                            CREATE TABLE IF NOT EXISTS clv_results (
                                 HSHD_NUM INT PRIMARY KEY,
                                 CLV FLOAT
-                            );
-                        END;
-                        """)
-                    except Exception:
-                        # For other database types like MySQL, PostgreSQL
-                        s.execute("""
-                        CREATE TABLE IF NOT EXISTS clv_results (
-                            HSHD_NUM INT PRIMARY KEY,
-                            CLV FLOAT
-                        )
-                        """)
-                    
-                    # Clear existing data
-                    s.execute("DELETE FROM clv_results")
-                    
-                    # Insert new data
-                    for _, row in clv_df.iterrows():
-                        s.execute(
-                            "INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)",
-                            params={"HSHD_NUM": int(row['HSHD_NUM']), "CLV": float(row['CLV'])}
-                        )
-                    s.commit()
-                st.success("✅ CLV results saved to clv_results table in database!")
-            except Exception as session_err:
-                st.error(f"Error saving to database: {session_err}")
-                st.info("Displaying results without saving to database")
-                st.dataframe(clv_df)
-                csv = clv_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Download CLV Results as CSV",
-                    data=csv,
-                    file_name='clv_results.csv',
-                    mime='text/csv',
-                )
-        except Exception as e:
-            st.error(f"Error calculating CLV: {e}")
-            st.info("Please check your database connection settings")
+                            )
+                            """)
+                        
+                        # Clear existing data
+                        s.execute("DELETE FROM clv_results")
+                        
+                        # Insert new data
+                        for _, row in clv_df.iterrows():
+                            s.execute(
+                                "INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)",
+                                params={"HSHD_NUM": int(row['HSHD_NUM']), "CLV": float(row['CLV'])}
+                            )
+                        s.commit()
+                    st.success("✅ CLV results saved to clv_results table in database!")
+                except Exception as session_err:
+                    st.error(f"Error saving to database: {session_err}")
+                    st.info("Displaying results without saving to database")
+                    st.dataframe(clv_df)
+                    csv = clv_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download CLV Results as CSV",
+                        data=csv,
+                        file_name='clv_results.csv',
+                        mime='text/csv',
+                    )
+            except Exception as e:
+                st.error(f"Error calculating CLV: {e}")
+                st.info("Please check your database connection settings")
+        elif st.session_state.sample_data_loaded:
+            # Calculate CLV from sample data
+            clv_df = st.session_state.transactions_df.groupby('HSHD_NUM')['SPEND'].sum().reset_index()
+            clv_df.columns = ['HSHD_NUM', 'CLV']
+            st.write("CLV Calculated from Sample Data:")
+            st.dataframe(clv_df)
+            csv = clv_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download CLV Results as CSV",
+                data=csv,
+                file_name='clv_results.csv',
+                mime='text/csv',
+            )
+        else:
+            st.error("No database connection or sample data available.")
 
 # --- Data Loader (CSV Upload) ---
 elif page == "Data Loader":
@@ -429,86 +481,58 @@ elif page == "Data Loader":
     uploaded_products = st.file_uploader("Upload Products Dataset", type="csv")
     
     if uploaded_transactions is not None:
-        st.session_state['transactions_df'] = pd.read_csv(uploaded_transactions)
+        st.session_state.transactions_df = pd.read_csv(uploaded_transactions)
+        st.session_state.sample_data_loaded = True
     if uploaded_households is not None:
-        st.session_state['households_df'] = pd.read_csv(uploaded_households)
+        st.session_state.households_df = pd.read_csv(uploaded_households)
+        st.session_state.sample_data_loaded = True
     if uploaded_products is not None:
-        st.session_state['products_df'] = pd.read_csv(uploaded_products)
+        st.session_state.products_df = pd.read_csv(uploaded_products)
+        st.session_state.sample_data_loaded = True
     
     if 'transactions_df' in st.session_state:
-        st.write("Transactions Data", st.session_state['transactions_df'].head())
+        st.write("Transactions Data", st.session_state.transactions_df.head())
     if 'households_df' in st.session_state:
-        st.write("Households Data", st.session_state['households_df'].head())
+        st.write("Households Data", st.session_state.households_df.head())
     if 'products_df' in st.session_state:
-        st.write("Products Data", st.session_state['products_df'].head())
+        st.write("Products Data", st.session_state.products_df.head())
     
     if (('transactions_df' not in st.session_state) or
         ('households_df' not in st.session_state) or
         ('products_df' not in st.session_state)):
         if st.button("Load Latest Data from Database"):
-            try:
-                tdf, hdf, pdf = load_data()
-                st.session_state['transactions_df'] = tdf
-                st.session_state['households_df'] = hdf
-                st.session_state['products_df'] = pdf
-                st.success("Loaded latest data from database.")
-                st.write("Transactions Data", tdf.head())
-                st.write("Households Data", hdf.head())
-                st.write("Products Data", pdf.head())
-            except Exception as e:
-                st.error(f"Error loading data: {e}")
-                st.info("Please check your database connection settings")
+            if st.session_state.conn is not None:
+                try:
+                    df_transactions, df_households, df_products = load_data()
+                    if df_transactions is not None:
+                        st.session_state.transactions_df = df_transactions
+                        st.session_state.households_df = df_households
+                        st.session_state.products_df = df_products
+                        st.session_state.sample_data_loaded = True
+                        st.success("Loaded latest data from database.")
+                        st.write("Transactions Data", df_transactions.head())
+                        st.write("Households Data", df_households.head())
+                        st.write("Products Data", df_products.head())
+                    else:
+                        st.error("Failed to load data from database.")
+                        if st.button("Load Sample Data Instead", key="sample_in_loader"):
+                            sample_transactions, sample_households, sample_products = load_sample_data()
+                            st.session_state.transactions_df = sample_transactions
+                            st.session_state.households_df = sample_households
+                            st.session_state.products_df = sample_products
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"Error loading data: {e}")
+                    st.info("Please check your database connection settings")
+            else:
+                st.error("No database connection available.")
+                if st.button("Load Sample Data Instead", key="no_conn_sample"):
+                    sample_transactions, sample_households, sample_products = load_sample_data()
+                    st.session_state.transactions_df = sample_transactions
+                    st.session_state.households_df = sample_households
+                    st.session_state.products_df = sample_products
+                    st.rerun()
                 
     # Add functionality to save uploaded data to database
     if ('transactions_df' in st.session_state and 
-        'households_df' in st.session_state and 
-        'products_df' in st.session_state):
-        if st.button("Save Uploaded Data to Database"):
-            try:
-                with conn.session as s:
-                    # Create tables if they don't exist
-                    try:
-                        # SQL Server syntax
-                        for table, df in [
-                            ('Transactions', st.session_state['transactions_df']),
-                            ('Households', st.session_state['households_df']),
-                            ('Products', st.session_state['products_df'])
-                        ]:
-                            cols = ", ".join([f"{col} VARCHAR(255)" for col in df.columns])
-                            s.execute(f"""
-                            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = '{table}')
-                            BEGIN
-                                CREATE TABLE {table} ({cols});
-                            END;
-                            """)
-                    except Exception:
-                        # Generic SQL syntax for other databases
-                        for table, df in [
-                            ('Transactions', st.session_state['transactions_df']),
-                            ('Households', st.session_state['households_df']),
-                            ('Products', st.session_state['products_df'])
-                        ]:
-                            cols = ", ".join([f"{col} VARCHAR(255)" for col in df.columns])
-                            s.execute(f"CREATE TABLE IF NOT EXISTS {table} ({cols})")
-                    
-                    # Insert data
-                    for table, df in [
-                        ('Transactions', st.session_state['transactions_df']),
-                        ('Households', st.session_state['households_df']),
-                        ('Products', st.session_state['products_df'])
-                    ]:
-                        # Clear existing data
-                        s.execute(f"DELETE FROM {table}")
-                        
-                        # Insert new data
-                        for _, row in df.iterrows():
-                            placeholders = ", ".join([f":{col}" for col in df.columns])
-                            cols = ", ".join(df.columns)
-                            params = {col: str(val) for col, val in row.items()}
-                            s.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", params=params)
-                        
-                    s.commit()
-                st.success("✅ All data saved to database successfully!")
-            except Exception as e:
-                st.error(f"Error saving to database: {e}")
-                st.info("Unable to save to database. You can still use the uploaded data for analysis.")
+        'households_df' in st.session_state and
