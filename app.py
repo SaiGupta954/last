@@ -133,9 +133,56 @@ else:
     st.stop()
 
 # --- Page Implementations ---
-# (Your Dashboard, Household Search, CLV Calculation, Data Loader codes remain the same)
 
-# ---- YOUR EXISTING DASHBOARD / LOGIC CODE STARTS HERE ----
-# I am not pasting it fully again to save space, but you will **continue using your existing Dashboard, Household Search, CLV Calculation, Data Loader** implementations from here.
-# They are perfectly fine after this fix.
-# ---- END ----
+# --- Load Data (if not already loaded) ---
+df_transactions, df_households, df_products = load_data(conn)
+
+if df_transactions is None:
+    st.error("Failed to load data. Please check database or data availability.")
+    st.stop()
+
+# --- Logic for Each Page ---
+if page == "Dashboard":
+    st.title("📊 Retail Analytics Dashboard")
+
+    st.subheader("Transaction Sample")
+    st.dataframe(df_transactions.head(), use_container_width=True)
+
+    st.subheader("Spend Over Time")
+    if "DATE" in df_transactions.columns:
+        df_transactions["DATE"] = pd.to_datetime(df_transactions["DATE"], errors="coerce")
+        spend_over_time = df_transactions.groupby(df_transactions["DATE"].dt.to_period('M')).sum(numeric_only=True)
+        spend_over_time.index = spend_over_time.index.to_timestamp()
+        st.line_chart(spend_over_time["SPEND"])
+    else:
+        st.warning("DATE column missing in Transactions data.")
+
+elif page == "Household Search":
+    st.title("🏠 Household Search")
+
+    selected_household = st.selectbox("Select Household Number", df_households["HSHD_NUM"].unique())
+
+    household_data = df_households[df_households["HSHD_NUM"] == selected_household]
+    st.write("Household Details:")
+    st.dataframe(household_data)
+
+elif page == "CLV Calculation":
+    st.title("💰 Customer Lifetime Value (CLV) Calculation")
+
+    if "HSHD_NUM" in df_transactions.columns and "SPEND" in df_transactions.columns:
+        clv_df = df_transactions.groupby("HSHD_NUM")["SPEND"].sum().reset_index()
+        st.dataframe(clv_df.head(), use_container_width=True)
+        st.success("Simple CLV calculated as total spend per household.")
+    else:
+        st.warning("Required columns missing in Transactions data.")
+
+elif page == "Data Loader":
+    st.title("🛠️ Data Loader")
+    st.write("**Transactions Data:**")
+    st.dataframe(df_transactions.head(), use_container_width=True)
+
+    st.write("**Households Data:**")
+    st.dataframe(df_households.head(), use_container_width=True)
+
+    st.write("**Products Data:**")
+    st.dataframe(df_products.head(), use_container_width=True)
