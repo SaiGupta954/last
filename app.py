@@ -56,6 +56,34 @@ def get_engine():
         return None
 
 engine = get_engine()
+# --- Auto Upload CSVs if Tables Missing ---
+
+def auto_create_tables(engine):
+    # Tables and their corresponding CSVs
+    tables = {
+        "Households": "400_households.csv",
+        "Transactions": "400_transactions.csv",
+        "Products": "400_products.csv"
+    }
+
+    for table, csv_file in tables.items():
+        try:
+            # Try selecting 1 row
+            with engine.connect() as conn:
+                conn.execute(text(f"SELECT TOP 1 * FROM {table}"))
+            st.sidebar.success(f"✅ Table '{table}' already exists")
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ Table '{table}' missing, creating from {csv_file}...")
+            if os.path.exists(csv_file):
+                df = pd.read_csv(csv_file)
+                df.columns = df.columns.str.strip()
+                df.to_sql(table, engine, if_exists="replace", index=False)
+                st.sidebar.success(f"✅ Created table '{table}' with {len(df)} records")
+            else:
+                st.sidebar.error(f"❌ CSV file '{csv_file}' not found. Upload it manually.")
+
+# --- Call it ---
+auto_create_tables(engine)
 
 # --- Load Data ---
 def load_data():
