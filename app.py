@@ -85,6 +85,10 @@ def get_db_connection():
         # Test query
         conn.query("SELECT 1")
         return conn
+conn = get_db_connection()
+
+st.success("Database connection established successfully!")
+
 
     except Exception as e:
         st.error(f"Database connection failed: {e}")
