@@ -1,188 +1,257 @@
-# app.py
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import urllib
+from sqlalchemy import create_engine, text
+from mlxtend.preprocessing import TransactionEncoder
+from mlxtend.frequent_patterns import apriori, association_rules
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score, classification_report, confusion_matrix
-import hashlib
-from sqlalchemy import text  # For raw SQL queries
 
-# --- Authentication (simple, local memory) ---
-def make_hashes(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
+st.set_page_config(page_title="Retail Analytics on Azure", layout="wide")
 
-def check_hashes(password, hashed_text):
-    return make_hashes(password) == hashed_text
+# --- Utility ---
+def find_col(df, *candidates):
+    cols = {c.strip().lower(): c.strip() for c in df.columns}
+    for cand in candidates:
+        key = cand.lower()
+        if key in cols:
+            return cols[key]
+    raise KeyError(f"None of {candidates} found in columns")
 
-if 'user_db' not in st.session_state:
-    st.session_state.user_db = {"admin": {"email": "gampara@mail.uc.edu", "password": make_hashes("admin123")}}
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-
-def login_signup():
-    if not st.session_state.authenticated:
-        auth_option = st.sidebar.selectbox("Login or Signup", ["Login", "Signup"])
-        if auth_option == "Signup":
-            st.sidebar.subheader("Create Account")
-            new_user = st.sidebar.text_input("Username")
-            new_email = st.sidebar.text_input("Email")
-            new_password = st.sidebar.text_input("Password", type='password')
-            if st.sidebar.button("Signup"):
-                if new_user and new_password:
-                    if new_user in st.session_state.user_db:
-                        st.sidebar.error("Username already exists.")
-                    else:
-                        hashed_pw = make_hashes(new_password)
-                        st.session_state.user_db[new_user] = {"email": new_email, "password": hashed_pw}
-                        st.sidebar.success("Signup successful. Please login.")
-                else:
-                    st.sidebar.error("Username and password cannot be empty.")
-        elif auth_option == "Login":
-            st.sidebar.subheader("Login")
-            username = st.sidebar.text_input("Username")
-            password = st.sidebar.text_input("Password", type='password')
-            if st.sidebar.button("Login"):
-                user = st.session_state.user_db.get(username)
-                if user and check_hashes(password, user['password']):
-                    st.session_state.authenticated = True
-                    st.session_state.username = username
-                    st.rerun()
-                else:
-                    st.sidebar.error("Invalid credentials")
-
-# --- Main App Logic ---
-st.set_page_config(page_title="Retail Analytics App", layout="wide")
-
-login_signup()
-
-if not st.session_state.authenticated:
-    st.warning("Please log in to access the application.")
-    st.stop()
-
-# --- Database Connection Function ---
-def get_db_connection():
+# --- Azure SQL Engine ---
+@st.cache_resource
+def get_engine():
     try:
-        conn = st.connection(
-            "sql",
-            type="sql",
-            dialect="mssql",
-            username=st.secrets.db_credentials.username,
-            password=st.secrets.db_credentials.password,
-            host=st.secrets.db_credentials.server,
-            port=1433,
-            database=st.secrets.db_credentials.database,
-            query={
-                "driver": "ODBC Driver 17 for SQL Server",
-                "Encrypt": "yes",
-                "TrustServerCertificate": "yes",
-                "ConnectionTimeout": "30",
-            }
+        params = urllib.parse.quote_plus(
+            "DRIVER={ODBC Driver 17 for SQL Server};"
+            "SERVER=newretailserver123.database.windows.net,1433;"
+            "DATABASE=RetailDB;"
+            "UID=azureuser;"
+            "PWD=YourStrongP@40ssw0rd;"
+            "Encrypt=yes;"
+            "TrustServerCertificate=no;"
+            "Connection Timeout=30;"
         )
-        conn.query("SELECT 1")
-        return conn
+        conn_str = f"mssql+pyodbc:///?odbc_connect={params}"
+        engine = create_engine(conn_str, connect_args={"timeout": 30})
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
     except Exception as e:
-        st.error(f"Database connection failed: {e}")
-        st.error("Please ensure your database credentials (username, password, server, database) are correctly configured in Streamlit Secrets.")
-        st.info("Secrets can be set in your local `.streamlit/secrets.toml` file or in the Streamlit Community Cloud app settings.")
-        st.code("""
-[db_credentials]
-username = "azureuser"
-password = "YourStrongP%40ssw0rd"
-server = "newretailserver123.database.windows.net"
-database = "RetailDB"
-        """, language="toml")
+        st.sidebar.error(f"\u274C Failed to connect to Azure SQL:\n\n{e}")
         return None
 
-# --- Establish Connection ---
-conn = get_db_connection()
+engine = get_engine()
 
-if conn:
-    st.success("Database connection established successfully!")
-else:
-    st.error("Database connection could not be established.")
-    st.stop()
-
-# --- Data Loading Function ---
-@st.cache_data(ttl=600)
-def load_data(_conn):
-    if _conn is None:
-        st.error("Cannot load data: Database connection is not available.")
-        return None, None, None
+# --- Load Data ---
+def load_data():
+    if engine is None:
+        st.stop()
     try:
-        limit = 10000
-        df_transactions = _conn.query(f"SELECT TOP {limit} * FROM Transactions", ttl=600)
-        df_households = _conn.query(f"SELECT TOP {limit} * FROM Households", ttl=600)
-        df_products = _conn.query(f"SELECT TOP {limit} * FROM Products", ttl=600)
+        hh = pd.read_sql_table("Households", engine)
+        trans = pd.read_sql_table("Transactions", engine)
+        prod = pd.read_sql_table("Products", engine)
 
-        df_transactions.columns = df_transactions.columns.str.strip()
-        df_households.columns = df_households.columns.str.strip()
-        df_products.columns = df_products.columns.str.strip()
+        hh.columns, trans.columns, prod.columns = map(lambda c: c.str.strip(), [hh.columns, trans.columns, prod.columns])
+        st.sidebar.success("\u2705 Loaded from Azure SQL Database")
 
-        return df_transactions, df_households, df_products
+        date_col = find_col(trans, "date", "purchase", "purchase_")
+        trans[date_col] = pd.to_datetime(trans[date_col], errors="coerce")
+        trans = trans.rename(columns={date_col: "DATE"})
+
     except Exception as e:
-        st.error(f"Failed to load data from database: {e}")
-        return None, None, None
+        st.sidebar.error(f"\u274C Failed to load data from Azure SQL: {e}")
+        st.stop()
 
-# --- Sidebar Navigation ---
-st.sidebar.title("Navigation")
-if conn:
-    page = st.sidebar.radio("Go to", ["Dashboard", "Household Search", "CLV Calculation", "Data Loader"])
+    merged = (
+        trans
+        .merge(prod, on=find_col(trans, "product_num"), how="left")
+        .merge(hh, on=find_col(trans, "hshd_num"), how="left")
+    )
+    return hh, prod, trans, merged
+
+hh, prod, trans, merged = load_data()
+
+# (Continue with analytics controls, KPIs, Dashboard, Charts, Churn Analysis, etc.)
+# Code remains identical from here
+hh, prod, trans, merged = load_data()
+
+
+# 4) Controls
+st.sidebar.header("⚙️ Analytics Controls")
+hcol     = find_col(merged,"hshd_num")
+bcol     = find_col(merged,"basket_num")
+icol     = find_col(merged,"income_range")
+min_sup  = st.sidebar.slider("Min Support",    0.0,0.10,0.01,step=0.005)
+min_conf = st.sidebar.slider("Min Confidence", 0.10,1.00,0.30,step=0.05)
+churn_w  = st.sidebar.slider("Churn window (days)",30,180,90,step=10)
+sel      = st.sidebar.selectbox(
+    "Household #", sorted(merged[hcol].unique()),
+    index=9, format_func=lambda x: f"{int(x):04d}"
+)
+
+# Header & KPIs
+st.title("🛒 Retail Analytics on Azure")
+total_spend = merged["SPEND"].sum()
+avg_basket  = merged.groupby([hcol,bcol])["SPEND"].sum().mean()
+c1,c2,c3    = st.columns([1,1,2])
+with c1: st.metric("💰 Total Spend", f"${total_spend:,.0f}")
+with c2: st.metric("🛍️ Avg Spend/Basket", f"${avg_basket:,.2f}")
+with c3: st.markdown(f"**As of:** {merged['DATE'].max().strftime('%b %d, %Y')}")
+st.markdown("---")
+
+# 5) Sample Pull
+st.subheader(f"📋 Data Pull for Household #{int(sel):04d}")
+dfp = (merged[merged[hcol]==sel]
+       .sort_values([hcol,bcol,"DATE",find_col(merged,"product_num"),"DEPARTMENT","COMMODITY"]))
+st.dataframe(dfp, height=200, use_container_width=True)
+st.markdown("---")
+
+# 6) Time Series & Spend/Visit
+colA,colB = st.columns(2, gap="large")
+with colA:
+    st.subheader("📈 Spend Over Time")
+    ts = merged.groupby("DATE")["SPEND"].sum().reset_index()
+    st.line_chart(ts.rename(columns={"DATE":"index"}).set_index("index")["SPEND"])
+with colB:
+    st.subheader("🏷️ Avg Spend/Visit by Income")
+    grp = merged.groupby([hcol,bcol,icol])["SPEND"].sum().reset_index()
+    avg_inc = grp.groupby(icol)["SPEND"].mean().sort_values(ascending=False)
+    st.bar_chart(avg_inc)
+st.markdown("---")
+
+# 7) Basket Analysis (Rules)
+st.subheader("🛒 Basket Analysis")
+baskets = (merged[merged[hcol]==sel]
+           .groupby(bcol)[find_col(merged,"product_num")]
+           .apply(lambda x: list(map(str,x))).tolist())
+te    = TransactionEncoder()
+df_tf = pd.DataFrame(te.fit(baskets).transform(baskets), columns=te.columns_)
+freq  = apriori(df_tf, min_support=min_sup, use_colnames=True)
+rules = association_rules(freq, metric="confidence", min_threshold=min_conf).sort_values("lift",ascending=False)
+if rules.empty:
+    st.info("No rules at these thresholds.")
 else:
-    st.sidebar.warning("Database connection failed. Cannot navigate.")
-    st.stop()
+    rules["antecedents"] = rules["antecedents"].apply(lambda s:", ".join(sorted(s)))
+    rules["consequents"] = rules["consequents"].apply(lambda s:", ".join(sorted(s)))
+    st.dataframe(rules[["antecedents","consequents","support","confidence","lift"]].head(10), height=200)
+st.markdown(f"• Total baskets: **{len(baskets)}** • Avg items/basket: **{np.mean([len(b) for b in baskets]):.1f}**")
 
-# --- Page Implementations ---
+# 7b) Basket Analysis (Random Forest ML)
+st.subheader("🔧 ML Basket Analysis (Random Forest)")
+if len(baskets)>10:
+    # target = most frequent product
+    target = merged[merged[hcol]==sel]["PRODUCT_NUM"].astype(str).value_counts().idxmax()
+    y = df_tf[target]
+    X = df_tf.drop(columns=[target])
 
-# --- Load Data (if not already loaded) ---
-df_transactions, df_households, df_products = load_data(conn)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, random_state=42)
+    clf = RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train, y_train)
+    acc = clf.score(X_test, y_test)
 
-if df_transactions is None:
-    st.error("Failed to load data. Please check database or data availability.")
-    st.stop()
+    st.markdown(f"**Predicting presence of product {target} → accuracy: {acc:.2%}**")
 
-# --- Logic for Each Page ---
-if page == "Dashboard":
-    st.title("📊 Retail Analytics Dashboard")
+    imp = pd.Series(clf.feature_importances_, index=X.columns) \
+            .nlargest(10)
+    fig, ax = plt.subplots(figsize=(6,3))
+    imp.plot(kind="bar", ax=ax)
+    ax.set_xlabel("Product Num")
+    ax.set_ylabel("Importance")
+    fig.tight_layout()
+    st.pyplot(fig)
+else:
+    st.info("Not enough baskets for ML analysis.")
+st.markdown("---")
 
-    st.subheader("Transaction Sample")
-    st.dataframe(df_transactions.head(), use_container_width=True)
+# 8) Churn Prediction
+st.subheader("🚨 Churn Prediction")
+maxd = merged["DATE"].max()
+rfm  = merged.groupby(hcol).agg(
+    recency   = ("DATE", lambda x: (maxd-x.max()).days),
+    frequency = (bcol,    "nunique"),
+    monetary  = ("SPEND",  "sum")
+).reset_index()
+rfm["churn"] = (rfm["recency"]>churn_w).astype(int)
+rate = rfm["churn"].mean()
+st.markdown(f"**Overall churn (> {churn_w}d):** **{rate:.1%}**")
+if rate>0:
+    Xc = rfm[["recency","frequency","monetary"]]
+    yc = rfm["churn"]
+    m  = LogisticRegression(max_iter=500).fit(Xc,yc)
+    row = rfm.loc[rfm[hcol]==sel,["recency","frequency","monetary"]]
+    p   = m.predict_proba(row)[0,1]
+    st.metric("Predicted Churn Risk",f"{p*100:.1f}%",delta=f"{rate*100:.1f}%")
+else:
+    st.warning("No churn cases; try changing the window.")
+st.markdown("""
+**How it works**  
+- Recency = days since last purchase  
+- Frequency = # of baskets  
+- Monetary = total spend  
+- Logistic regression on RFM
+""")
+st.markdown("---")
+st.header("🔎 Retail Insights Dashboard")
 
-    st.subheader("Spend Over Time")
-    if "DATE" in df_transactions.columns:
-        df_transactions["DATE"] = pd.to_datetime(df_transactions["DATE"], errors="coerce")
-        spend_over_time = df_transactions.groupby(df_transactions["DATE"].dt.to_period('M')).sum(numeric_only=True)
-        spend_over_time.index = spend_over_time.index.to_timestamp()
-        st.line_chart(spend_over_time["SPEND"])
-    else:
-        st.warning("DATE column missing in Transactions data.")
+# 9) Demographics & Engagement
+with st.expander("👪 Demographics & Engagement", expanded=True):
+    size_col  = find_col(merged,"hh_size","hshd_size")
+    child_col = find_col(merged,"children")
+    dem = merged.groupby([size_col, child_col, icol]).agg(
+        total_spend=("SPEND","sum"),
+        visits=("BASKET_NUM","nunique")
+    ).reset_index()
+    dem["spend_per_visit"] = dem["total_spend"]/dem["visits"]
+    pivot = dem.pivot_table(index=icol,columns=child_col,values="spend_per_visit").fillna(0)
+    fig, ax = plt.subplots(figsize=(6,3))
+    pivot.plot(kind="bar", ax=ax)
+    ax.set_xlabel("Income Range"); ax.set_ylabel("Avg Spend/Visit"); ax.legend(title="Has Children")
+    fig.tight_layout()
+    st.pyplot(fig)
 
-elif page == "Household Search":
-    st.title("🏠 Household Search")
+# 10) Engagement Over Time by Commodity
+with st.expander("📊 Engagement Over Time by Commodity"):
+    top5 = merged.groupby("COMMODITY")["SPEND"].sum().nlargest(5).index
+    ts_c = merged[merged["COMMODITY"].isin(top5)].groupby(
+    [pd.Grouper(key="DATE", freq="ME"), "COMMODITY"]
+)["SPEND"].sum().reset_index()
+    fig, ax = plt.subplots(figsize=(6,3))
+    for c in top5:
+        dfc = ts_c[ts_c["COMMODITY"]==c]
+        ax.plot(dfc["DATE"], dfc["SPEND"], label=c)
+    ax.set_xlabel("Month"); ax.set_ylabel("Total Spend"); ax.legend(title="Commodity",ncol=2)
+    fig.tight_layout()
+    st.pyplot(fig)
 
-    selected_household = st.selectbox("Select Household Number", df_households["HSHD_NUM"].unique())
+# 11) Seasonal Trends
+with st.expander("❄️ Seasonal Spend Patterns"):
+    merged["Month"] = merged["DATE"].dt.month
+    mn = merged.groupby("Month")["SPEND"].mean().reset_index()
+    fig, ax = plt.subplots(figsize=(6,2.5))
+    ax.plot(mn["Month"], mn["SPEND"], marker="o")
+    ax.set_xticks(range(1,13)); ax.set_xlabel("Month"); ax.set_ylabel("Avg Spend/Visit")
+    fig.tight_layout()
+    st.pyplot(fig)
 
-    household_data = df_households[df_households["HSHD_NUM"] == selected_household]
-    st.write("Household Details:")
-    st.dataframe(household_data)
+# 12) Brand & Organic Preferences
+with st.expander("🌿 Brand & Organic Preferences"):
+    brand_col = find_col(merged,"brand_ty","brand_type")
+    org_col   = find_col(merged,"natural_organic_flag","organic_flag","natural/organic flag")
+    bt = merged.groupby(brand_col)["SPEND"].sum().reset_index()
+    of = merged.groupby(org_col)["SPEND"].sum().reset_index()
+    c1,c2 = st.columns(2)
+    with c1:
+        st.subheader("Private vs National Brand Spend")
+        fig, ax = plt.subplots(figsize=(4,2))
+        ax.bar(bt[brand_col], bt["SPEND"]); ax.set_ylabel("Total Spend")
+        fig.tight_layout(); st.pyplot(fig)
+    with c2:
+        st.subheader("Organic vs Non-Organic Spend")
+        fig, ax = plt.subplots(figsize=(4,2))
+        ax.bar(of[org_col], of["SPEND"]); ax.set_ylabel("Total Spend")
+        fig.tight_layout(); st.pyplot(fig)
 
-elif page == "CLV Calculation":
-    st.title("💰 Customer Lifetime Value (CLV) Calculation")
-
-    if "HSHD_NUM" in df_transactions.columns and "SPEND" in df_transactions.columns:
-        clv_df = df_transactions.groupby("HSHD_NUM")["SPEND"].sum().reset_index()
-        st.dataframe(clv_df.head(), use_container_width=True)
-        st.success("Simple CLV calculated as total spend per household.")
-    else:
-        st.warning("Required columns missing in Transactions data.")
-
-elif page == "Data Loader":
-    st.title("🛠️ Data Loader")
-    st.write("**Transactions Data:**")
-    st.dataframe(df_transactions.head(), use_container_width=True)
-
-    st.write("**Households Data:**")
-    st.dataframe(df_households.head(), use_container_width=True)
-
-    st.write("**Products Data:**")
-    st.dataframe(df_products.head(), use_container_width=True)
