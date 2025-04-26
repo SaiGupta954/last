@@ -84,7 +84,11 @@ def auto_create_tables(engine):
 
 # --- Call it ---
 auto_create_tables(engine)
-
+# --- Upload Section (prepare first, but don't use yet) ---
+st.sidebar.header("📂 Upload your own data (only if Azure fails)")
+uploaded_households = st.sidebar.file_uploader("Upload Households CSV", type=["csv"], key="households")
+uploaded_transactions = st.sidebar.file_uploader("Upload Transactions CSV", type=["csv"], key="transactions")
+uploaded_products = st.sidebar.file_uploader("Upload Products CSV", type=["csv"], key="products")
 # --- Load Data ---
 def load_data():
     if engine is None:
