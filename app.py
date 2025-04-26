@@ -90,7 +90,7 @@ def load_data():
     if engine is None:
         st.stop()
     try:
-        hh    = pd.read_sql_table("Households", engine, schema="dbo")
+        hh    = pd.read_sql_table("households", engine, schema="dbo")
         trans = pd.read_sql_table("Transactions", engine, schema="dbo")
         prod  = pd.read_sql_table("Products", engine, schema="dbo")
 
