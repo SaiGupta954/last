@@ -57,6 +57,7 @@ if not st.session_state.authenticated:
     st.stop()
 
 # --- Database connection using Streamlit's SQLConnection ---
+# This uses the connection parameters from .streamlit/secrets.toml
 conn = st.connection("sql", type="sql")
 
 @st.cache_data(ttl=600)
@@ -76,159 +77,164 @@ page = st.sidebar.radio("Go to", ["Dashboard", "Household Search", "CLV Calculat
 # --- Dashboard ---
 if page == "Dashboard":
     st.title("📊 Retail Customer Analytics Dashboard")
-    df_transactions, df_households, df_products = load_data()
-    df_transactions.rename(columns={'HSHD_NUM': 'hshd_num', 'PRODUCT_NUM': 'product_num'}, inplace=True)
-    df_households.rename(columns={'HSHD_NUM': 'hshd_num'}, inplace=True)
-    df_products.rename(columns={'PRODUCT_NUM': 'product_num'}, inplace=True)
-    full_df = df_transactions.merge(df_households, on='hshd_num', how='left')
-    full_df = full_df.merge(df_products, on='product_num', how='left')
+    
+    try:
+        df_transactions, df_households, df_products = load_data()
+        df_transactions.rename(columns={'HSHD_NUM': 'hshd_num', 'PRODUCT_NUM': 'product_num'}, inplace=True)
+        df_households.rename(columns={'HSHD_NUM': 'hshd_num'}, inplace=True)
+        df_products.rename(columns={'PRODUCT_NUM': 'product_num'}, inplace=True)
+        full_df = df_transactions.merge(df_households, on='hshd_num', how='left')
+        full_df = full_df.merge(df_products, on='product_num', how='left')
 
-    st.header("📈 Customer Engagement Over Time")
-    df_transactions['date'] = pd.to_datetime(df_transactions['YEAR'].astype(str) + df_transactions['WEEK_NUM'].astype(str) + '0', format='%Y%U%w')
-    weekly_engagement = df_transactions.groupby(df_transactions['date'].dt.to_period('W'))['SPEND'].sum().reset_index()
-    weekly_engagement['ds'] = weekly_engagement['date'].dt.start_time
-    st.line_chart(weekly_engagement.set_index('ds')['SPEND'])
+        st.header("📈 Customer Engagement Over Time")
+        df_transactions['date'] = pd.to_datetime(df_transactions['YEAR'].astype(str) + df_transactions['WEEK_NUM'].astype(str) + '0', format='%Y%U%w')
+        weekly_engagement = df_transactions.groupby(df_transactions['date'].dt.to_period('W'))['SPEND'].sum().reset_index()
+        weekly_engagement['ds'] = weekly_engagement['date'].dt.start_time
+        st.line_chart(weekly_engagement.set_index('ds')['SPEND'])
 
-    st.header("👨👩👧 Demographics and Engagement")
-    selected_demo = st.selectbox("Segment by:", ['INCOME_RANGE', 'AGE_RANGE', 'CHILDREN'])
-    demo_spending = full_df.groupby(selected_demo)['SPEND'].sum().reset_index()
-    st.bar_chart(demo_spending.rename(columns={selected_demo: 'index'}).set_index('index'))
+        st.header("👨👩👧 Demographics and Engagement")
+        selected_demo = st.selectbox("Segment by:", ['INCOME_RANGE', 'AGE_RANGE', 'CHILDREN'])
+        demo_spending = full_df.groupby(selected_demo)['SPEND'].sum().reset_index()
+        st.bar_chart(demo_spending.rename(columns={selected_demo: 'index'}).set_index('index'))
 
-    st.header("🔍 Customer Segmentation")
-    segmentation = full_df.groupby(['hshd_num']).agg({'SPEND': 'sum', 'INCOME_RANGE': 'first', 'AGE_RANGE': 'first'})
-    st.dataframe(segmentation.sort_values(by='SPEND', ascending=False).head(10))
+        st.header("🔍 Customer Segmentation")
+        segmentation = full_df.groupby(['hshd_num']).agg({'SPEND': 'sum', 'INCOME_RANGE': 'first', 'AGE_RANGE': 'first'})
+        st.dataframe(segmentation.sort_values(by='SPEND', ascending=False).head(10))
 
-    st.header("🌟 Loyalty Program Effect")
-    if 'LOYALTY_FLAG' in df_households.columns:
-        loyalty = full_df.groupby('LOYALTY_FLAG')['SPEND'].agg(['sum', 'mean']).reset_index()
-        st.dataframe(loyalty)
+        st.header("🌟 Loyalty Program Effect")
+        if 'LOYALTY_FLAG' in df_households.columns:
+            loyalty = full_df.groupby('LOYALTY_FLAG')['SPEND'].agg(['sum', 'mean']).reset_index()
+            st.dataframe(loyalty)
 
-    st.header("🧺 Basket Analysis")
-    basket = df_transactions.groupby(['BASKET_NUM', 'product_num'])['SPEND'].sum().reset_index()
-    top_products = basket.groupby('product_num')['SPEND'].sum().nlargest(10).reset_index()
-    top_products = top_products.merge(df_products, on='product_num', how='left')
-    if 'COMMODITY' in top_products.columns:
-        st.bar_chart(top_products.set_index('COMMODITY')['SPEND'])
-        product_spending = top_products.groupby('COMMODITY')['SPEND'].sum().reset_index()
-        fig = px.pie(product_spending, values='SPEND', names='COMMODITY', title='Spending Distribution by Product Category')
+        st.header("🧺 Basket Analysis")
+        basket = df_transactions.groupby(['BASKET_NUM', 'product_num'])['SPEND'].sum().reset_index()
+        top_products = basket.groupby('product_num')['SPEND'].sum().nlargest(10).reset_index()
+        top_products = top_products.merge(df_products, on='product_num', how='left')
+        if 'COMMODITY' in top_products.columns:
+            st.bar_chart(top_products.set_index('COMMODITY')['SPEND'])
+            product_spending = top_products.groupby('COMMODITY')['SPEND'].sum().reset_index()
+            fig = px.pie(product_spending, values='SPEND', names='COMMODITY', title='Spending Distribution by Product Category')
+            st.plotly_chart(fig)
+        else:
+            st.dataframe(top_products)
+
+        st.header("📆 Seasonal Spending Patterns")
+        df_transactions['month'] = df_transactions['date'].dt.month_name()
+        seasonal = df_transactions.groupby('month')['SPEND'].sum().reset_index()
+        seasonal['month'] = pd.Categorical(seasonal['month'], categories=[
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ], ordered=True)
+        seasonal = seasonal.sort_values('month')
+        st.bar_chart(seasonal.set_index('month'))
+
+        st.header("💰 Customer Lifetime Value")
+        clv = df_transactions.groupby('hshd_num')['SPEND'].sum().reset_index().sort_values(by='SPEND', ascending=False)
+        st.dataframe(clv.head(10))
+
+        st.header("📊 Customer Spending by Product Category")
+        category_spending = full_df.groupby('COMMODITY')['SPEND'].sum().reset_index()
+        st.bar_chart(category_spending.set_index('COMMODITY')['SPEND'])
+
+        st.header("🏆 Top 10 Customers by Spending")
+        top_customers = full_df.groupby('hshd_num')['SPEND'].sum().reset_index().sort_values(by='SPEND', ascending=False)
+        st.dataframe(top_customers.head(10))
+
+        st.header("📈 Trends in Age Group Spending")
+        age_group_spending = full_df.groupby('AGE_RANGE')['SPEND'].sum().reset_index()
+        st.bar_chart(age_group_spending.set_index('AGE_RANGE')['SPEND'])
+        fig = px.pie(age_group_spending, values='SPEND', names='AGE_RANGE', title='Spending Distribution by Age Group')
         st.plotly_chart(fig)
-    else:
-        st.dataframe(top_products)
 
-    st.header("📆 Seasonal Spending Patterns")
-    df_transactions['month'] = df_transactions['date'].dt.month_name()
-    seasonal = df_transactions.groupby('month')['SPEND'].sum().reset_index()
-    seasonal['month'] = pd.Categorical(seasonal['month'], categories=[
-        'January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December'
-    ], ordered=True)
-    seasonal = seasonal.sort_values('month')
-    st.bar_chart(seasonal.set_index('month'))
+        tab1, tab2 = st.tabs(["⚠️ Churn Prediction", "🧺 Basket Analysis"])
+        with tab1:
+            st.header("Churn Prediction: Customer Engagement Over Time")
+            departments = ["All"] + sorted(df_products['DEPARTMENT'].dropna().unique())
+            commodities = ["All"] + sorted(df_products['COMMODITY'].dropna().unique())
+            brand_types = ["All"] + sorted(df_products['BRAND_TY'].dropna().unique())
+            organic_flags = ["All"] + sorted(df_products['NATURAL_ORGANIC_FLAG'].dropna().unique())
+            col1, col2, col3, col4 = st.columns(4)
+            department = col1.selectbox("Select Department:", departments)
+            commodity = col2.selectbox("Select Commodity:", commodities)
+            brand_type = col3.selectbox("Select Brand Type:", brand_types)
+            organic_flag = col4.selectbox("Select Organic:", organic_flags)
+            if st.button("Apply Filters", key="churn_apply"):
+                filtered = df_transactions.merge(df_products, on='product_num', how='left')
+                if department != "All":
+                    filtered = filtered[filtered['DEPARTMENT'] == department]
+                if commodity != "All":
+                    filtered = filtered[filtered['COMMODITY'] == commodity]
+                if brand_type != "All":
+                    filtered = filtered[filtered['BRAND_TY'] == brand_type]
+                if organic_flag != "All":
+                    filtered = filtered[filtered['NATURAL_ORGANIC_FLAG'] == organic_flag]
+                if not filtered.empty:
+                    churn_df = filtered.groupby('date')['SPEND'].sum().reset_index().sort_values('date')
+                    st.line_chart(churn_df.set_index("date")["SPEND"])
+                    with st.expander("📄 Raw Data"):
+                        st.dataframe(churn_df)
+                else:
+                    st.warning("No data found for selected filters.")
 
-    st.header("💰 Customer Lifetime Value")
-    clv = df_transactions.groupby('hshd_num')['SPEND'].sum().reset_index().sort_values(by='SPEND', ascending=False)
-    st.dataframe(clv.head(10))
+            st.subheader("ML Churn Prediction: At-Risk Customers")
+            now = df_transactions['date'].max()
+            rfm = df_transactions.groupby('hshd_num').agg(
+                recency=('date', lambda x: (now - x.max()).days),
+                frequency=('BASKET_NUM', 'nunique'),
+                monetary=('SPEND', 'sum')
+            )
+            rfm['churn'] = (rfm['recency'] > 84).astype(int)
+            X = rfm[['recency', 'frequency', 'monetary']]
+            y = rfm['churn']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
+            clf = RandomForestClassifier(n_estimators=100, random_state=42)
+            clf.fit(X_train, y_train)
+            y_pred = clf.predict(X_test)
+            st.write("**Classification Report:**")
+            st.text(classification_report(y_test, y_pred))
+            st.write("**Confusion Matrix:**")
+            st.dataframe(pd.DataFrame(confusion_matrix(y_test, y_pred),
+                                    columns=['Predicted Not Churn', 'Predicted Churn'],
+                                    index=['Actual Not Churn', 'Actual Churn']))
+            feat_imp = pd.Series(clf.feature_importances_, index=['Recency', 'Frequency', 'Monetary'])
+            st.write("**Feature Importances:**")
+            st.bar_chart(feat_imp)
 
-    st.header("📊 Customer Spending by Product Category")
-    category_spending = full_df.groupby('COMMODITY')['SPEND'].sum().reset_index()
-    st.bar_chart(category_spending.set_index('COMMODITY')['SPEND'])
-
-    st.header("🏆 Top 10 Customers by Spending")
-    top_customers = full_df.groupby('hshd_num')['SPEND'].sum().reset_index().sort_values(by='SPEND', ascending=False)
-    st.dataframe(top_customers.head(10))
-
-    st.header("📈 Trends in Age Group Spending")
-    age_group_spending = full_df.groupby('AGE_RANGE')['SPEND'].sum().reset_index()
-    st.bar_chart(age_group_spending.set_index('AGE_RANGE')['SPEND'])
-    fig = px.pie(age_group_spending, values='SPEND', names='AGE_RANGE', title='Spending Distribution by Age Group')
-    st.plotly_chart(fig)
-
-    tab1, tab2 = st.tabs(["⚠️ Churn Prediction", "🧺 Basket Analysis"])
-    with tab1:
-        st.header("Churn Prediction: Customer Engagement Over Time")
-        departments = ["All"] + sorted(df_products['DEPARTMENT'].dropna().unique())
-        commodities = ["All"] + sorted(df_products['COMMODITY'].dropna().unique())
-        brand_types = ["All"] + sorted(df_products['BRAND_TY'].dropna().unique())
-        organic_flags = ["All"] + sorted(df_products['NATURAL_ORGANIC_FLAG'].dropna().unique())
-        col1, col2, col3, col4 = st.columns(4)
-        department = col1.selectbox("Select Department:", departments)
-        commodity = col2.selectbox("Select Commodity:", commodities)
-        brand_type = col3.selectbox("Select Brand Type:", brand_types)
-        organic_flag = col4.selectbox("Select Organic:", organic_flags)
-        if st.button("Apply Filters", key="churn_apply"):
-            filtered = df_transactions.merge(df_products, on='product_num', how='left')
-            if department != "All":
-                filtered = filtered[filtered['DEPARTMENT'] == department]
-            if commodity != "All":
-                filtered = filtered[filtered['COMMODITY'] == commodity]
-            if brand_type != "All":
-                filtered = filtered[filtered['BRAND_TY'] == brand_type]
-            if organic_flag != "All":
-                filtered = filtered[filtered['NATURAL_ORGANIC_FLAG'] == organic_flag]
-            if not filtered.empty:
-                churn_df = filtered.groupby('date')['SPEND'].sum().reset_index().sort_values('date')
-                st.line_chart(churn_df.set_index("date")["SPEND"])
-                with st.expander("📄 Raw Data"):
-                    st.dataframe(churn_df)
-            else:
-                st.warning("No data found for selected filters.")
-
-        st.subheader("ML Churn Prediction: At-Risk Customers")
-        now = df_transactions['date'].max()
-        rfm = df_transactions.groupby('hshd_num').agg(
-            recency=('date', lambda x: (now - x.max()).days),
-            frequency=('BASKET_NUM', 'nunique'),
-            monetary=('SPEND', 'sum')
-        )
-        rfm['churn'] = (rfm['recency'] > 84).astype(int)
-        X = rfm[['recency', 'frequency', 'monetary']]
-        y = rfm['churn']
-        X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
-        clf = RandomForestClassifier(n_estimators=100, random_state=42)
-        clf.fit(X_train, y_train)
-        y_pred = clf.predict(X_test)
-        st.write("**Classification Report:**")
-        st.text(classification_report(y_test, y_pred))
-        st.write("**Confusion Matrix:**")
-        st.dataframe(pd.DataFrame(confusion_matrix(y_test, y_pred),
-                                  columns=['Predicted Not Churn', 'Predicted Churn'],
-                                  index=['Actual Not Churn', 'Actual Churn']))
-        feat_imp = pd.Series(clf.feature_importances_, index=['Recency', 'Frequency', 'Monetary'])
-        st.write("**Feature Importances:**")
-        st.bar_chart(feat_imp)
-
-    with tab2:
-        st.header("Basket Analysis - Predicting Total Spend")
-        basket_merged = df_transactions.merge(df_products, on='product_num', how='left')
-        basket_features = pd.get_dummies(
-            basket_merged[['BASKET_NUM', 'DEPARTMENT', 'COMMODITY', 'BRAND_TY', 'NATURAL_ORGANIC_FLAG']]
-        )
-        X_basket = basket_features.groupby('BASKET_NUM').sum()
-        y_basket = basket_merged.groupby('BASKET_NUM')['SPEND'].sum()
-        X_train, X_test, y_train, y_test = train_test_split(X_basket, y_basket, test_size=0.2, random_state=42)
-        rf = RandomForestRegressor(n_estimators=100, random_state=42)
-        rf.fit(X_train, y_train)
-        y_pred = rf.predict(X_test)
-        r2 = r2_score(y_test, y_pred)
-        mse = mean_squared_error(y_test, y_pred)
-        st.write(f"**R² Score:** {r2:.3f}")
-        st.write(f"**MSE:** {mse:.2f}")
-        st.subheader("Predicted vs. Actual Basket Spend (Test Set)")
-        chart_df = pd.DataFrame({"Actual": y_test.values, "Predicted": y_pred})
-        st.line_chart(chart_df.reset_index(drop=True))
-        st.subheader("📄 Actual vs. Predicted Spend Table")
-        st.dataframe(chart_df)
-        csv = chart_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download CSV",
-            data=csv,
-            file_name='predicted_vs_actual_basket_spend.csv',
-            mime='text/csv',
-        )
-        importances = pd.Series(rf.feature_importances_, index=X_basket.columns)
-        top_features = importances.sort_values(ascending=False).head(10)
-        st.write("**Top Drivers of Basket Spend:**")
-        st.bar_chart(top_features)
+        with tab2:
+            st.header("Basket Analysis - Predicting Total Spend")
+            basket_merged = df_transactions.merge(df_products, on='product_num', how='left')
+            basket_features = pd.get_dummies(
+                basket_merged[['BASKET_NUM', 'DEPARTMENT', 'COMMODITY', 'BRAND_TY', 'NATURAL_ORGANIC_FLAG']]
+            )
+            X_basket = basket_features.groupby('BASKET_NUM').sum()
+            y_basket = basket_merged.groupby('BASKET_NUM')['SPEND'].sum()
+            X_train, X_test, y_train, y_test = train_test_split(X_basket, y_basket, test_size=0.2, random_state=42)
+            rf = RandomForestRegressor(n_estimators=100, random_state=42)
+            rf.fit(X_train, y_train)
+            y_pred = rf.predict(X_test)
+            r2 = r2_score(y_test, y_pred)
+            mse = mean_squared_error(y_test, y_pred)
+            st.write(f"**R² Score:** {r2:.3f}")
+            st.write(f"**MSE:** {mse:.2f}")
+            st.subheader("Predicted vs. Actual Basket Spend (Test Set)")
+            chart_df = pd.DataFrame({"Actual": y_test.values, "Predicted": y_pred})
+            st.line_chart(chart_df.reset_index(drop=True))
+            st.subheader("📄 Actual vs. Predicted Spend Table")
+            st.dataframe(chart_df)
+            csv = chart_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name='predicted_vs_actual_basket_spend.csv',
+                mime='text/csv',
+            )
+            importances = pd.Series(rf.feature_importances_, index=X_basket.columns)
+            top_features = importances.sort_values(ascending=False).head(10)
+            st.write("**Top Drivers of Basket Spend:**")
+            st.bar_chart(top_features)
+    except Exception as e:
+        st.error(f"Error loading dashboard data: {e}")
+        st.info("Please check your database connection settings in .streamlit/secrets.toml")
 
 # --- Household Search ---
 elif page == "Household Search":
@@ -258,29 +264,39 @@ elif page == "Household Search":
 elif page == "CLV Calculation":
     st.title("Calculate and Save CLV")
     if st.button("Run CLV Calculation and Save to SQL"):
-        clv_query = """
-        SELECT HSHD_NUM, SUM(SPEND) AS CLV
-        FROM transactions
-        GROUP BY HSHD_NUM
-        """
-        clv_df = conn.query(clv_query)
-        with conn.session as s:
-            s.execute("""
-            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
-            BEGIN
-                CREATE TABLE clv_results (
-                    HSHD_NUM INT PRIMARY KEY,
-                    CLV FLOAT
-                );
-            END;
-            """)
-            for _, row in clv_df.iterrows():
-                s.execute(
-                    "INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)",
-                    params={"HSHD_NUM": int(row['HSHD_NUM']), "CLV": float(row['CLV'])}
-                )
-            s.commit()
-        st.success("✅ CLV results saved to clv_results table in Azure SQL!")
+        try:
+            clv_query = """
+            SELECT HSHD_NUM, SUM(SPEND) AS CLV
+            FROM transactions
+            GROUP BY HSHD_NUM
+            """
+            clv_df = conn.query(clv_query)
+            
+            with conn.session as s:
+                s.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'clv_results')
+                BEGIN
+                    CREATE TABLE clv_results (
+                        HSHD_NUM INT PRIMARY KEY,
+                        CLV FLOAT
+                    );
+                END;
+                """)
+                
+                # Clear existing data
+                s.execute("DELETE FROM clv_results")
+                
+                # Insert new data
+                for _, row in clv_df.iterrows():
+                    s.execute(
+                        "INSERT INTO clv_results (HSHD_NUM, CLV) VALUES (:HSHD_NUM, :CLV)",
+                        params={"HSHD_NUM": int(row['HSHD_NUM']), "CLV": float(row['CLV'])}
+                    )
+                s.commit()
+            st.success("✅ CLV results saved to clv_results table in Azure SQL!")
+        except Exception as e:
+            st.error(f"Error calculating CLV: {e}")
+            st.info("Please check your database connection settings in .streamlit/secrets.toml")
 
 # --- Data Loader (CSV Upload) ---
 elif page == "Data Loader":
@@ -288,27 +304,34 @@ elif page == "Data Loader":
     uploaded_transactions = st.file_uploader("Upload Transactions Dataset", type="csv")
     uploaded_households = st.file_uploader("Upload Households Dataset", type="csv")
     uploaded_products = st.file_uploader("Upload Products Dataset", type="csv")
+    
     if uploaded_transactions is not None:
         st.session_state['transactions_df'] = pd.read_csv(uploaded_transactions)
     if uploaded_households is not None:
         st.session_state['households_df'] = pd.read_csv(uploaded_households)
     if uploaded_products is not None:
         st.session_state['products_df'] = pd.read_csv(uploaded_products)
+    
     if 'transactions_df' in st.session_state:
         st.write("Transactions Data", st.session_state['transactions_df'].head())
     if 'households_df' in st.session_state:
         st.write("Households Data", st.session_state['households_df'].head())
     if 'products_df' in st.session_state:
         st.write("Products Data", st.session_state['products_df'].head())
+    
     if (('transactions_df' not in st.session_state) or
         ('households_df' not in st.session_state) or
         ('products_df' not in st.session_state)):
         if st.button("Load Latest Data from Database"):
-            tdf, hdf, pdf = load_data()
-            st.session_state['transactions_df'] = tdf
-            st.session_state['households_df'] = hdf
-            st.session_state['products_df'] = pdf
-            st.success("Loaded latest data from database.")
-            st.write("Transactions Data", tdf.head())
-            st.write("Households Data", hdf.head())
-            st.write("Products Data", pdf.head())
+            try:
+                tdf, hdf, pdf = load_data()
+                st.session_state['transactions_df'] = tdf
+                st.session_state['households_df'] = hdf
+                st.session_state['products_df'] = pdf
+                st.success("Loaded latest data from database.")
+                st.write("Transactions Data", tdf.head())
+                st.write("Households Data", hdf.head())
+                st.write("Products Data", pdf.head())
+            except Exception as e:
+                st.error(f"Error loading data: {e}")
+                st.info("Please check your database connection settings in .streamlit/secrets.toml")
