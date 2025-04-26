@@ -73,7 +73,7 @@ def get_db_connection():
             port=1433,
             database=st.secrets.db_credentials.database,
             query={
-                "driver": "ODBC Driver 18 for SQL Server",
+                "driver": "ODBC Driver 17 for SQL Server",
                 "Encrypt": "yes",
                 "TrustServerCertificate": "yes",
                 "ConnectionTimeout": "30",
