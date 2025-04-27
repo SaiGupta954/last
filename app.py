@@ -104,7 +104,7 @@ def load_data():
         st.sidebar.success("✅ Loaded from Azure SQL Database")
 
         date_col = find_col(trans, "date", "purchase", "purchase_")
-        trans[date_col] = pd.to_datetime(trans[date_col], format="%Y-%m-%d", errors="coerce")
+        trans[date_col] = pd.to_datetime(trans[date_col], errors="coerce")
 
         trans = trans.rename(columns={date_col: "DATE"})
 
@@ -138,7 +138,12 @@ avg_basket  = merged.groupby([hcol, bcol])["SPEND"].sum().mean()
 c1, c2, c3 = st.columns([1,1,2])
 with c1: st.metric("💰 Total Spend", f"${total_spend:,.0f}")
 with c2: st.metric("🏍️ Avg Spend/Basket", f"${avg_basket:,.2f}")
-with c3: st.markdown(f"**As of:** {merged['DATE'].max().strftime('%b %d, %Y')}")
+max_date = merged['DATE'].max()
+with c3:
+    if pd.notnull(max_date):
+        st.markdown(f"**As of:** {max_date.strftime('%b %d, %Y')}")
+    else:
+        st.markdown("**As of:** (no valid date)")
 st.markdown("---")
 
 # --- Basket Analysis ---
