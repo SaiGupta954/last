@@ -97,7 +97,7 @@ def load_data():
         st.stop()
     try:
         hh    = pd.read_sql_table("households", engine, schema="dbo")
-        trans = pd.read_sql_table("transactions", engine, schema="dbo")
+        trans[date_col] = pd.to_datetime(trans[date_col], errors="coerce")
         prod  = pd.read_sql_table("products", engine, schema="dbo")
 
         hh.columns, trans.columns, prod.columns = map(lambda c: c.str.strip(), [hh.columns, trans.columns, prod.columns])
